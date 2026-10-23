@@ -1,4 +1,3 @@
-
 package com.example.mpaz_pro_1
 
 import android.os.Bundle
@@ -236,7 +235,13 @@ fun MPAZApp(
             PantallaInicio(nombre = nombre, onCerrarSesion = { cerrarSesion() })
         },
         pantallaProfesor = {
-            PantallaProfesor(onCerrarSesion = { cerrarSesion() })
+            PantallaProfesor(
+                onCerrarSesion = { cerrarSesion() },
+                onAbrirMisCursos = { navController.navigate(Rutas.MIS_CURSOS) }
+            )
+        },
+        pantallaMisCursos = {
+            PantallaMisCursos(onVolver = { navController.popBackStack() })
         },
         pantallaUTP = {
             PantallaUTP(onCerrarSesion = { cerrarSesion() })
@@ -773,9 +778,10 @@ fun TarjetaAsignatura(
 // PANEL DEL PROFESOR
 
 @Composable
-fun PantallaProfesor(onCerrarSesion: () -> Unit) {
-    var seccion by remember { mutableStateOf("Inicio") }
-
+fun PantallaProfesor(
+    onCerrarSesion: () -> Unit,
+    onAbrirMisCursos: () -> Unit
+) {
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -806,36 +812,25 @@ fun PantallaProfesor(onCerrarSesion: () -> Unit) {
             "🏫", "Mis cursos",
             "Consulta los cursos que tienes asignados.",
             Color(0xFFFFE0B2)
-        ) { seccion = "Mis cursos" }
+        ) { onAbrirMisCursos() }
 
         TarjetaPanel(
             "📚", "Material educativo",
             "Consulta el material publicado por UTP.",
             Color(0xFFDCEAFF)
-        ) { seccion = "Material educativo" }
+        ) { mostrarFuncionFutura("Material educativo") }
 
         TarjetaPanel(
             "📝", "Actividades y evaluaciones",
             "Prepara actividades para tus estudiantes.",
             Color(0xFFFFE0ED)
-        ) { seccion = "Actividades y evaluaciones" }
+        ) { mostrarFuncionFutura("Actividades y evaluaciones") }
 
         TarjetaPanel(
             "📊", "Resultados del curso",
             "Aquí mostraremos los avances de los estudiantes.",
             Color(0xFFD9FBE6)
-        ) { seccion = "Resultados del curso" }
-
-        if (seccion != "Inicio") {
-            Spacer(Modifier.height(16.dp))
-            Text(
-                text = seccion,
-                fontSize = 20.sp,
-                fontWeight = FontWeight.Bold,
-                color = Azul
-            )
-            Text("Esta sección se implementará en los siguientes pasos.")
-        }
+        ) { mostrarFuncionFutura("Resultados del curso") }
 
         Spacer(Modifier.height(20.dp))
 
@@ -846,6 +841,73 @@ fun PantallaProfesor(onCerrarSesion: () -> Unit) {
             Text("Cerrar sesión")
         }
     }
+}
+
+@Composable
+fun PantallaMisCursos(onVolver: () -> Unit) {
+    Surface(
+        modifier = Modifier.fillMaxSize(),
+        color = Fondo
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .verticalScroll(rememberScrollState())
+                .padding(20.dp)
+        ) {
+            TextButton(onClick = onVolver) {
+                Text("← Volver al panel")
+            }
+
+            Spacer(Modifier.height(12.dp))
+            Text("🏫", fontSize = 52.sp)
+            Text(
+                "Mis cursos",
+                fontSize = 29.sp,
+                fontWeight = FontWeight.ExtraBold,
+                color = Azul
+            )
+            Text(
+                "Consulta los cursos que tienes asignados.",
+                fontSize = 16.sp,
+                color = TextoOscuro
+            )
+
+            Spacer(Modifier.height(22.dp))
+
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(24.dp),
+                colors = CardDefaults.cardColors(containerColor = Color.White)
+            ) {
+                Column(Modifier.padding(20.dp)) {
+                    Text("📚", fontSize = 36.sp)
+                    Spacer(Modifier.height(8.dp))
+                    Text(
+                        "Cursos asignados",
+                        fontSize = 19.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = TextoOscuro
+                    )
+                    Spacer(Modifier.height(6.dp))
+                    Text(
+                        "Aquí se mostrarán los cursos asignados al profesor.",
+                        color = TextoOscuro
+                    )
+                    Spacer(Modifier.height(12.dp))
+                    Text(
+                        "Función futura",
+                        color = Azul,
+                        fontWeight = FontWeight.Bold
+                    )
+                }
+            }
+        }
+    }
+}
+
+private fun mostrarFuncionFutura(seccion: String) {
+    // Las demás secciones se implementarán en los siguientes pasos.
 }
 
 // PANEL UTP
@@ -957,3 +1019,4 @@ fun TarjetaPanel(
         }
     }
 }
+

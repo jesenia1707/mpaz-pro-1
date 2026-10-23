@@ -1,4 +1,3 @@
-
 package com.example.mpaz_pro_1.nav
 
 import androidx.compose.runtime.Composable
@@ -11,6 +10,7 @@ object Rutas {
     const val REGISTRO = "registro"
     const val ESTUDIANTE = "estudiante"
     const val PROFESOR = "profesor"
+    const val MIS_CURSOS = "mis_cursos"
     const val UTP = "utp"
 }
 
@@ -21,30 +21,15 @@ fun AppNavigation(
     pantallaRegistro: @Composable () -> Unit,
     pantallaEstudiante: @Composable () -> Unit,
     pantallaProfesor: @Composable () -> Unit,
+    pantallaMisCursos: @Composable () -> Unit,
     pantallaUTP: @Composable () -> Unit
 ) {
-    NavHost(
-        navController = navController,
-        startDestination = Rutas.LOGIN
-    ) {
-        composable(Rutas.LOGIN) {
-            pantallaLogin()
-        }
-
-        composable(Rutas.REGISTRO) {
-            pantallaRegistro()
-        }
-
-        composable(Rutas.ESTUDIANTE) {
-            pantallaEstudiante()
-        }
-
-        composable(Rutas.PROFESOR) {
-            pantallaProfesor()
-        }
-
-        composable(Rutas.UTP) {
-            pantallaUTP()
-        }
+    NavHost(navController = navController, startDestination = Rutas.LOGIN) {
+        composable(Rutas.LOGIN) { pantallaLogin() }
+        composable(Rutas.REGISTRO) { pantallaRegistro() }
+        composable(Rutas.ESTUDIANTE) { pantallaEstudiante() }
+        composable(Rutas.PROFESOR) { pantallaProfesor() }
+        composable(Rutas.MIS_CURSOS) { pantallaMisCursos() }
+        composable(Rutas.UTP) { pantallaUTP() }
     }
 }

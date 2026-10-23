@@ -10,16 +10,26 @@ class AuthRepository(
         clave: String,
         rolSeleccionado: String
     ): ResultadoLogin {
+
         if (correo.isBlank() || clave.isBlank()) {
-            return ResultadoLogin.Error("Completa tu usuario y contraseña.")
+            return ResultadoLogin.Error(
+                "Completa tu usuario y contraseña."
+            )
         }
 
-        val usuario = usuarioDao.buscarPorCorreo(correo.trim())
+        val correoNormalizado = correo.trim().lowercase()
+        val usuario = usuarioDao.buscarPorCorreo(correoNormalizado)
 
-        if (usuario == null ||
-            !PasswordHasher.verify(clave, usuario.claveHash)
-        ) {
-            return ResultadoLogin.Error("Correo o contraseña incorrectos.")
+        if (usuario == null) {
+            return ResultadoLogin.Error(
+                "DIAGNÓSTICO: no se encontró el correo en Room."
+            )
+        }
+
+        if (!PasswordHasher.verify(clave, usuario.claveHash)) {
+            return ResultadoLogin.Error(
+                "DIAGNÓSTICO: el correo existe, pero la contraseña no coincide."
+            )
         }
 
         if (!usuario.rol.equals(rolSeleccionado, ignoreCase = true)) {
