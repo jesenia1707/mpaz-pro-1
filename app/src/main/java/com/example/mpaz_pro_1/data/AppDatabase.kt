@@ -13,9 +13,10 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         Usuario::class,
         Curso::class,
         AsignacionCurso::class,
-        AlumnoPreinscrito::class
+        AlumnoPreinscrito::class,
+        MaterialEducativo::class
     ],
-    version = 2,
+    version = 3,
     exportSchema = false
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -28,12 +29,16 @@ abstract class AppDatabase : RoomDatabase() {
 
     abstract fun alumnoPreinscritoDao(): AlumnoPreinscritoDao
 
+    abstract fun materialEducativoDao(): MaterialEducativoDao
+
     companion object {
 
         @Volatile
         private var INSTANCE: AppDatabase? = null
 
+        // Migración de la versión 1 a la versión 2
         private val MIGRATION_1_2 = object : Migration(1, 2) {
+
             override fun migrate(db: SupportSQLiteDatabase) {
 
                 db.execSQL("""
@@ -111,14 +116,68 @@ abstract class AppDatabase : RoomDatabase() {
             }
         }
 
+        // Migración de la versión 2 a la versión 3
+        private val MIGRATION_2_3 = object : Migration(2, 3) {
+
+            override fun migrate(db: SupportSQLiteDatabase) {
+
+                db.execSQL("""
+                    CREATE TABLE IF NOT EXISTS materiales_educativos (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                        profesorId INTEGER NOT NULL,
+                        cursoId INTEGER NOT NULL,
+                        asignatura TEXT NOT NULL,
+                        unidad TEXT NOT NULL,
+                        tema TEXT NOT NULL,
+                        descripcion TEXT NOT NULL,
+                        nombreArchivo TEXT NOT NULL,
+                        rutaArchivo TEXT NOT NULL,
+                        estado TEXT NOT NULL,
+                        observacionUtp TEXT NOT NULL,
+                        fechaCreacion INTEGER NOT NULL,
+                        fechaRevision INTEGER,
+                        FOREIGN KEY(profesorId)
+                            REFERENCES usuarios(id)
+                            ON UPDATE NO ACTION ON DELETE CASCADE,
+                        FOREIGN KEY(cursoId)
+                            REFERENCES cursos(id)
+                            ON UPDATE NO ACTION ON DELETE CASCADE
+                    )
+                """)
+
+                db.execSQL("""
+                    CREATE INDEX IF NOT EXISTS
+                    index_materiales_educativos_profesorId
+                    ON materiales_educativos(profesorId)
+                """)
+
+                db.execSQL("""
+                    CREATE INDEX IF NOT EXISTS
+                    index_materiales_educativos_cursoId
+                    ON materiales_educativos(cursoId)
+                """)
+
+                db.execSQL("""
+                    CREATE INDEX IF NOT EXISTS
+                    index_materiales_educativos_estado
+                    ON materiales_educativos(estado)
+                """)
+            }
+        }
+
         fun getDatabase(context: Context): AppDatabase {
+
             return INSTANCE ?: synchronized(this) {
+
                 val instance = Room.databaseBuilder(
                     context.applicationContext,
                     AppDatabase::class.java,
                     "mpaz_database"
                 )
-                    .addMigrations(MIGRATION_1_2)
+                    .addMigrations(
+                        MIGRATION_1_2,
+                        MIGRATION_2_3
+                    )
                     .build()
 
                 INSTANCE = instance

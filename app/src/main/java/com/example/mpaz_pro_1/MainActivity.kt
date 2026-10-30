@@ -1,8 +1,13 @@
 package com.example.mpaz_pro_1
 
 import android.os.Bundle
+import android.content.Context
+import android.net.Uri
+import android.provider.OpenableColumns
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
@@ -21,11 +26,11 @@ import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.platform.LocalContext
 import kotlinx.coroutines.launch
-import androidx.navigation.compose.rememberNavController
-import androidx.navigation.NavHostController
-import com.example.mpaz_pro_1.nav.AppNavigation
-import com.example.mpaz_pro_1.nav.Rutas
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+import java.io.File
 
 private val Fondo = Color(0xFFFFF9F0)
 private val Azul = Color(0xFF3985F7)
@@ -46,12 +51,20 @@ class MainActivity : ComponentActivity() {
         val registroRepository = com.example.mpaz_pro_1.data.RegistroRepository(
             database.usuarioDao()
         )
+        val materialRepository = com.example.mpaz_pro_1.data.MaterialRepository(
+            materialDao = database.materialEducativoDao(),
+            asignacionCursoDao = database.asignacionCursoDao()
+        )
 
         setContent {
             MaterialTheme {
                 MPAZApp(
                     authRepository = authRepository,
-                    registroRepository = registroRepository
+                    registroRepository = registroRepository,
+                    materialRepository = materialRepository,
+                    asignacionCursoDao = database.asignacionCursoDao(),
+                    usuarioDao = database.usuarioDao(),
+                    cursoDao = database.cursoDao()
                 )
             }
         }
@@ -61,192 +74,217 @@ class MainActivity : ComponentActivity() {
 @Composable
 fun MPAZApp(
     authRepository: com.example.mpaz_pro_1.data.AuthRepository,
-    registroRepository: com.example.mpaz_pro_1.data.RegistroRepository
+    registroRepository: com.example.mpaz_pro_1.data.RegistroRepository,
+    materialRepository: com.example.mpaz_pro_1.data.MaterialRepository,
+    asignacionCursoDao: com.example.mpaz_pro_1.data.AsignacionCursoDao,
+    usuarioDao: com.example.mpaz_pro_1.data.UsuarioDao,
+    cursoDao: com.example.mpaz_pro_1.data.CursoDao
 ) {
-    val navController = rememberNavController()
     val scope = rememberCoroutineScope()
 
     var nombre by remember { mutableStateOf("") }
+    var usuarioId by remember { mutableStateOf(0) }
     var perfil by remember { mutableStateOf("Estudiante") }
+    var pantallaActual by remember { mutableStateOf("LOGIN") }
     var cargando by remember { mutableStateOf(false) }
     var mensaje by remember { mutableStateOf("") }
     var mensajeEsError by remember { mutableStateOf(true) }
 
-    fun rutaParaRol(rol: String): String = when (rol) {
-        "Estudiante" -> Rutas.ESTUDIANTE
-        "Profesor" -> Rutas.PROFESOR
-        else -> Rutas.UTP
-    }
-
     fun cerrarSesion() {
         nombre = ""
+        usuarioId = 0
         perfil = "Estudiante"
         mensaje = ""
-        navController.navigate(Rutas.LOGIN) {
-            popUpTo(0) { inclusive = true }
-            launchSingleTop = true
-        }
+        pantallaActual = "LOGIN"
     }
 
-    AppNavigation(
-        navController = navController,
-        pantallaLogin = {
-            PantallaLogin(
-                modoRegistro = false,
-                cargando = cargando,
-                mensaje = mensaje,
-                mensajeEsError = mensajeEsError,
-                onCambiarModo = { registro ->
-                    mensaje = ""
-                    navController.navigate(if (registro) Rutas.REGISTRO else Rutas.LOGIN) {
-                        launchSingleTop = true
-                    }
-                },
-                onIngresar = { correo, clave, rol ->
-                    if (!cargando) {
-                        scope.launch {
-                            cargando = true
-                            mensaje = ""
-                            try {
-                                when (
-                                    val resultado = authRepository.iniciarSesion(
-                                        correo = correo,
-                                        clave = clave,
-                                        rolSeleccionado = rol
-                                    )
-                                ) {
-                                    is com.example.mpaz_pro_1.data.ResultadoLogin.Exito -> {
-                                        nombre = resultado.usuario.nombre
-                                        perfil = resultado.usuario.rol
-                                        mensaje = ""
-                                        navController.navigate(rutaParaRol(perfil)) {
-                                            popUpTo(Rutas.LOGIN) { inclusive = true }
-                                            launchSingleTop = true
+    when (pantallaActual) {
+        "LOGIN" -> PantallaLogin(
+            modoRegistro = false,
+            cargando = cargando,
+            mensaje = mensaje,
+            mensajeEsError = mensajeEsError,
+            onCambiarModo = { registro ->
+                mensaje = ""
+                pantallaActual = if (registro) "REGISTRO" else "LOGIN"
+            },
+            onIngresar = { correo, clave, rol ->
+                if (!cargando) {
+                    scope.launch {
+                        cargando = true
+                        mensaje = ""
+                        try {
+                            when (
+                                val resultado = authRepository.iniciarSesion(
+                                    correo = correo.trim(),
+                                    clave = clave,
+                                    rolSeleccionado = rol
+                                )
+                            ) {
+                                is com.example.mpaz_pro_1.data.ResultadoLogin.Exito -> {
+                                    nombre = resultado.usuario.nombre
+                                    usuarioId = resultado.usuario.id
+                                    val rolGuardado = resultado.usuario.rol.trim()
+                                    perfil = when {
+                                        rolGuardado.equals("Estudiante", ignoreCase = true) -> "Estudiante"
+                                        rolGuardado.equals("Profesor", ignoreCase = true) ||
+                                                rolGuardado.equals("Docente", ignoreCase = true) -> "Profesor"
+                                        rolGuardado.equals("UTP", ignoreCase = true) ||
+                                                rolGuardado.equals("Administrador", ignoreCase = true) -> "UTP"
+                                        else -> rolGuardado
+                                    }
+                                    pantallaActual = when (perfil) {
+                                        "Estudiante" -> "ESTUDIANTE"
+                                        "Profesor" -> "PROFESOR"
+                                        "UTP" -> "UTP"
+                                        else -> {
+                                            mensaje = "El rol de esta cuenta no es válido: $rolGuardado"
+                                            mensajeEsError = true
+                                            "LOGIN"
                                         }
                                     }
-                                    is com.example.mpaz_pro_1.data.ResultadoLogin.Error -> {
-                                        mensaje = resultado.mensaje
-                                        mensajeEsError = true
-                                    }
                                 }
-                            } catch (_: Exception) {
-                                mensaje = "No se pudo iniciar sesión. Inténtalo nuevamente."
-                                mensajeEsError = true
-                            } finally {
-                                cargando = false
-                            }
-                        }
-                    }
-                },
-                onRegistrar = { nombreNuevo, correo, clave, rol ->
-                    if (!cargando) {
-                        scope.launch {
-                            cargando = true
-                            mensaje = ""
-                            try {
-                                when (
-                                    val resultado = registroRepository.registrarUsuario(
-                                        nombre = nombreNuevo,
-                                        correo = correo,
-                                        clave = clave,
-                                        rol = rol
-                                    )
-                                ) {
-                                    com.example.mpaz_pro_1.data.ResultadoRegistro.Exito -> {
-                                        mensaje = "Cuenta creada. Ahora puedes iniciar sesión."
-                                        mensajeEsError = false
-                                        navController.navigate(Rutas.LOGIN) {
-                                            popUpTo(Rutas.LOGIN) { inclusive = true }
-                                            launchSingleTop = true
-                                        }
-                                    }
-                                    is com.example.mpaz_pro_1.data.ResultadoRegistro.Error -> {
-                                        mensaje = resultado.mensaje
-                                        mensajeEsError = true
-                                    }
+                                is com.example.mpaz_pro_1.data.ResultadoLogin.Error -> {
+                                    mensaje = resultado.mensaje
+                                    mensajeEsError = true
                                 }
-                            } catch (_: Exception) {
-                                mensaje = "No se pudo crear la cuenta. Inténtalo nuevamente."
-                                mensajeEsError = true
-                            } finally {
-                                cargando = false
                             }
+                        } catch (e: Exception) {
+                            mensaje = e.localizedMessage
+                                ?: "No se pudo iniciar sesión. Inténtalo nuevamente."
+                            mensajeEsError = true
+                        } finally {
+                            cargando = false
                         }
                     }
                 }
-            )
-        },
-        pantallaRegistro = {
-            PantallaLogin(
-                modoRegistro = true,
-                cargando = cargando,
-                mensaje = mensaje,
-                mensajeEsError = mensajeEsError,
-                onCambiarModo = { registro ->
-                    mensaje = ""
-                    navController.navigate(if (registro) Rutas.REGISTRO else Rutas.LOGIN) {
-                        launchSingleTop = true
-                    }
-                },
-                onIngresar = { correo, clave, rol ->
-                    navController.navigate(Rutas.LOGIN) {
-                        launchSingleTop = true
-                    }
-                },
-                onRegistrar = { nombreNuevo, correo, clave, rol ->
-                    if (!cargando) {
-                        scope.launch {
-                            cargando = true
-                            mensaje = ""
-                            try {
-                                when (
-                                    val resultado = registroRepository.registrarUsuario(
-                                        nombre = nombreNuevo,
-                                        correo = correo,
-                                        clave = clave,
-                                        rol = rol
-                                    )
-                                ) {
-                                    com.example.mpaz_pro_1.data.ResultadoRegistro.Exito -> {
-                                        mensaje = "Cuenta creada. Ahora puedes iniciar sesión."
-                                        mensajeEsError = false
-                                        navController.navigate(Rutas.LOGIN) {
-                                            popUpTo(Rutas.LOGIN) { inclusive = true }
-                                            launchSingleTop = true
-                                        }
-                                    }
-                                    is com.example.mpaz_pro_1.data.ResultadoRegistro.Error -> {
-                                        mensaje = resultado.mensaje
-                                        mensajeEsError = true
-                                    }
+            },
+            onRegistrar = { _, _, _, _ -> },
+            onCrearUtp = {
+                mensaje = ""
+                pantallaActual = "CREAR_UTP"
+            }
+        )
+
+        "REGISTRO" -> PantallaLogin(
+            modoRegistro = true,
+            cargando = cargando,
+            mensaje = mensaje,
+            mensajeEsError = mensajeEsError,
+            onCambiarModo = { registro ->
+                mensaje = ""
+                pantallaActual = if (registro) "REGISTRO" else "LOGIN"
+            },
+            onIngresar = { _, _, _ -> pantallaActual = "LOGIN" },
+            onRegistrar = { nombreNuevo, correo, clave, rol ->
+                if (!cargando) {
+                    scope.launch {
+                        cargando = true
+                        mensaje = ""
+                        try {
+                            when (
+                                val resultado = registroRepository.registrarUsuario(
+                                    nombre = nombreNuevo.trim(),
+                                    correo = correo.trim(),
+                                    clave = clave,
+                                    rol = rol
+                                )
+                            ) {
+                                com.example.mpaz_pro_1.data.ResultadoRegistro.Exito -> {
+                                    mensaje = "Cuenta creada. Ahora puedes iniciar sesión."
+                                    mensajeEsError = false
+                                    pantallaActual = "LOGIN"
                                 }
-                            } catch (_: Exception) {
-                                mensaje = "No se pudo crear la cuenta. Inténtalo nuevamente."
-                                mensajeEsError = true
-                            } finally {
-                                cargando = false
+                                is com.example.mpaz_pro_1.data.ResultadoRegistro.Error -> {
+                                    mensaje = resultado.mensaje
+                                    mensajeEsError = true
+                                }
                             }
+                        } catch (e: Exception) {
+                            mensaje = e.localizedMessage
+                                ?: "No se pudo crear la cuenta. Inténtalo nuevamente."
+                            mensajeEsError = true
+                        } finally {
+                            cargando = false
                         }
                     }
                 }
-            )
-        },
-        pantallaEstudiante = {
-            PantallaInicio(nombre = nombre, onCerrarSesion = { cerrarSesion() })
-        },
-        pantallaProfesor = {
-            PantallaProfesor(
-                onCerrarSesion = { cerrarSesion() },
-                onAbrirMisCursos = { navController.navigate(Rutas.MIS_CURSOS) }
-            )
-        },
-        pantallaMisCursos = {
-            PantallaMisCursos(onVolver = { navController.popBackStack() })
-        },
-        pantallaUTP = {
-            PantallaUTP(onCerrarSesion = { cerrarSesion() })
+            }
+        )
+
+        "ESTUDIANTE" -> PantallaInicio(
+            nombre = nombre,
+            onCerrarSesion = { cerrarSesion() }
+        )
+
+        "PROFESOR" -> PantallaProfesor(
+            profesorId = usuarioId,
+            materialRepository = materialRepository,
+            asignacionCursoDao = asignacionCursoDao,
+            onCerrarSesion = { cerrarSesion() },
+            onAbrirMisCursos = { pantallaActual = "MIS_CURSOS" }
+        )
+
+        "MIS_CURSOS" -> PantallaMisCursos(
+            onVolver = { pantallaActual = "PROFESOR" }
+        )
+
+        "UTP" -> PantallaUTP(
+            usuarioDao = usuarioDao,
+            registroRepository = registroRepository,
+            cursoDao = cursoDao,
+            onCerrarSesion = { cerrarSesion() }
+        )
+
+        "CREAR_UTP" -> PantallaCrearCuentaUTP(
+            cargando = cargando,
+            mensaje = mensaje,
+            mensajeEsError = mensajeEsError,
+            onVolver = {
+                mensaje = ""
+                pantallaActual = "LOGIN"
+            },
+            onCrear = { nombreNuevo, correo, clave ->
+                if (!cargando) {
+                    scope.launch {
+                        cargando = true
+                        mensaje = ""
+                        try {
+                            when (
+                                val resultado = registroRepository.registrarUsuario(
+                                    nombre = nombreNuevo.trim(),
+                                    correo = correo.trim(),
+                                    clave = clave,
+                                    rol = "UTP"
+                                )
+                            ) {
+                                com.example.mpaz_pro_1.data.ResultadoRegistro.Exito -> {
+                                    mensaje = "Cuenta UTP creada. Ya puedes iniciar sesión."
+                                    mensajeEsError = false
+                                    pantallaActual = "LOGIN"
+                                }
+                                is com.example.mpaz_pro_1.data.ResultadoRegistro.Error -> {
+                                    mensaje = resultado.mensaje
+                                    mensajeEsError = true
+                                }
+                            }
+                        } catch (e: Exception) {
+                            mensaje = e.localizedMessage
+                                ?: "No se pudo crear la cuenta UTP."
+                            mensajeEsError = true
+                        } finally {
+                            cargando = false
+                        }
+                    }
+                }
+            }
+        )
+
+        else -> {
+            LaunchedEffect(Unit) { cerrarSesion() }
+            CircularProgressIndicator()
         }
-    )
+    }
 }
 
 // LOGIN Y REGISTRO
@@ -259,7 +297,8 @@ fun PantallaLogin(
     mensajeEsError: Boolean,
     onCambiarModo: (Boolean) -> Unit,
     onIngresar: (String, String, String) -> Unit,
-    onRegistrar: (String, String, String, String) -> Unit
+    onRegistrar: (String, String, String, String) -> Unit,
+    onCrearUtp: () -> Unit = {}
 ) {
     var nombre by remember { mutableStateOf("") }
     var correo by remember { mutableStateOf("") }
@@ -452,6 +491,16 @@ fun PantallaLogin(
                     )
                 }
 
+                if (!modoRegistro) {
+                    TextButton(
+                        onClick = onCrearUtp,
+                        modifier = Modifier.fillMaxWidth(),
+                        enabled = !cargando
+                    ) {
+                        Text("Crear cuenta UTP de prueba")
+                    }
+                }
+
                 if (modoRegistro) {
                     Text(
                         text = "Por seguridad, las cuentas UTP deben ser creadas por un administrador autorizado.",
@@ -483,248 +532,215 @@ fun PantallaInicio(
 ) {
     var seccion by remember { mutableStateOf("Inicio") }
     var asignaturaSeleccionada by remember { mutableStateOf("") }
+    var unidadSeleccionada by remember { mutableStateOf("") }
+    var temaSeleccionado by remember { mutableStateOf("") }
 
-    Surface(
-        modifier = Modifier.fillMaxSize(),
-        color = Fondo
-    ) {
-        Column(Modifier.fillMaxSize()) {
+// Contenido educativo local de ejemplo. Más adelante se podrá administrar desde UTP/profesor.
+    val contenidos = mapOf(
+        "Lenguaje y Comunicación" to listOf(
+            "Unidad 1: Aprendo a leer" to listOf("Las vocales", "Conozco las consonantes", "Formo sílabas"),
+            "Unidad 2: Comprendo historias" to listOf("Personajes y lugares", "Ordeno una historia", "Comprensión lectora")
+        ),
+        "Matemática" to listOf(
+            "Unidad 1: Números" to listOf("Cuento y represento números", "Comparo: mayor y menor", "Ordeno números"),
+            "Unidad 2: Sumo y resto" to listOf("La suma", "La resta", "Resuelvo problemas")
+        ),
+        "Ciencias Naturales" to listOf(
+            "Unidad 1: Mi cuerpo" to listOf("Partes del cuerpo", "Los sentidos", "Cuido mi salud"),
+            "Unidad 2: Seres vivos" to listOf("Animales", "Plantas", "Necesidades de los seres vivos")
+        ),
+        "Historia, Geografía y Ciencias Sociales" to listOf(
+            "Unidad 1: Mi entorno" to listOf("Mi familia", "Mi escuela", "Normas de convivencia"),
+            "Unidad 2: Nuestro país" to listOf("Chile y sus símbolos", "Paisajes de Chile", "Mi comunidad")
+        )
+    )
+
+    fun volverAAsignaturas() {
+        asignaturaSeleccionada = ""
+        unidadSeleccionada = ""
+        temaSeleccionado = ""
+    }
+
+    Surface(modifier = Modifier.fillMaxSize(), color = Fondo) {
+        Column(modifier = Modifier.fillMaxSize()) {
             Column(
                 modifier = Modifier
                     .weight(1f)
                     .verticalScroll(rememberScrollState())
-                    .padding(horizontal = 20.dp)
+                    .padding(horizontal = 20.dp, vertical = 18.dp)
             ) {
-                Spacer(Modifier.height(18.dp))
-
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Box(
-                        modifier = Modifier
-                            .size(52.dp)
-                            .background(Azul, RoundedCornerShape(17.dp)),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Text("🌈", fontSize = 28.sp)
-                    }
-
-                    Spacer(Modifier.width(12.dp))
-
-                    Column {
-                        Text(
-                            text = "MPAZ PRO 1.º",
-                            fontSize = 23.sp,
-                            fontWeight = FontWeight.ExtraBold,
-                            color = Azul
-                        )
-                        Text(
-                            text = "¡Aprender es una aventura!",
-                            fontSize = 12.sp,
-                            color = Color.DarkGray
-                        )
-                    }
-                }
-
-                Spacer(Modifier.height(22.dp))
-
-                Card(
-                    modifier = Modifier.fillMaxWidth(),
-                    shape = RoundedCornerShape(26.dp),
-                    colors = CardDefaults.cardColors(
-                        containerColor = Azul
-                    )
-                ) {
-                    Row(
-                        modifier = Modifier.padding(18.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Column(Modifier.weight(1f)) {
-                            Text(
-                                text = "¡Hola, $nombre! 👋",
-                                fontSize = 22.sp,
-                                fontWeight = FontWeight.Bold,
-                                color = Color.White
-                            )
-                            Spacer(Modifier.height(6.dp))
-                            Text(
-                                text = "¿Qué aprenderemos hoy?",
-                                color = Color.White,
-                                fontSize = 14.sp
-                            )
-                            Spacer(Modifier.height(10.dp))
-                            Text(
-                                text = "¡Vamos a jugar y aprender!",
-                                color = Color.White,
-                                fontSize = 12.sp
-                            )
-                        }
-                        Text("🧒", fontSize = 56.sp)
-                    }
-                }
-
-                Spacer(Modifier.height(24.dp))
-
-                Text(
-                    text = "¡Elige tu aventura! 🚀",
-                    fontSize = 21.sp,
-                    fontWeight = FontWeight.ExtraBold,
-                    color = TextoOscuro
-                )
-
-                Spacer(Modifier.height(14.dp))
-
-                Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                    TarjetaAsignatura(
-                        "📚", "Lenguaje",
-                        "¡Lee y descubre!",
-                        Rosado,
-                        Modifier.weight(1f)
-                    ) {
-                        asignaturaSeleccionada = "Lenguaje y Comunicación"
-                    }
-
-                    TarjetaAsignatura(
-                        "🔢", "Matemática",
-                        "¡Juega con números!",
-                        Amarillo,
-                        Modifier.weight(1f)
-                    ) {
-                        asignaturaSeleccionada = "Matemática"
-                    }
-                }
-
-                Spacer(Modifier.height(12.dp))
-
-                Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                    TarjetaAsignatura(
-                        "🌱", "Ciencias",
-                        "¡Explora el mundo!",
-                        Verde,
-                        Modifier.weight(1f)
-                    ) {
-                        asignaturaSeleccionada = "Ciencias Naturales"
-                    }
-
-                    TarjetaAsignatura(
-                        "🌎", "Historia",
-                        "¡Conoce tu mundo!",
-                        Morado,
-                        Modifier.weight(1f)
-                    ) {
-                        asignaturaSeleccionada =
-                            "Historia, Geografía y Ciencias Sociales"
-                    }
-                }
-
-                Spacer(Modifier.height(22.dp))
-
-                Card(
-                    modifier = Modifier.fillMaxWidth(),
-                    shape = RoundedCornerShape(24.dp),
-                    colors = CardDefaults.cardColors(
-                        containerColor = Color.White
-                    )
-                ) {
-                    Column(Modifier.padding(18.dp)) {
+                when (seccion) {
+                    "Inicio" -> {
                         Row(verticalAlignment = Alignment.CenterVertically) {
-                            Text("⭐", fontSize = 27.sp)
-                            Spacer(Modifier.width(10.dp))
-
+                            Box(
+                                modifier = Modifier
+                                    .size(52.dp)
+                                    .background(Azul, RoundedCornerShape(17.dp)),
+                                contentAlignment = Alignment.Center
+                            ) { Text("🌈", fontSize = 28.sp) }
+                            Spacer(Modifier.width(12.dp))
                             Column {
-                                Text(
-                                    text = "¡Mira cuánto has avanzado!",
-                                    fontWeight = FontWeight.Bold,
-                                    fontSize = 16.sp
-                                )
-                                Text(
-                                    text = "3 de 5 actividades completadas",
-                                    color = Color.Gray,
-                                    fontSize = 12.sp
-                                )
+                                Text("MPAZ PRO 1.º", fontSize = 23.sp, fontWeight = FontWeight.ExtraBold, color = Azul)
+                                Text("¡Aprender es una aventura!", fontSize = 12.sp, color = TextoOscuro)
                             }
                         }
-
+                        Spacer(Modifier.height(22.dp))
+                        Card(
+                            modifier = Modifier.fillMaxWidth(),
+                            shape = RoundedCornerShape(26.dp),
+                            colors = CardDefaults.cardColors(containerColor = Azul)
+                        ) {
+                            Row(Modifier.padding(18.dp), verticalAlignment = Alignment.CenterVertically) {
+                                Column(Modifier.weight(1f)) {
+                                    Text("¡Hola, $nombre! 👋", fontSize = 22.sp, fontWeight = FontWeight.Bold, color = Color.White)
+                                    Spacer(Modifier.height(6.dp))
+                                    Text("¿Qué aprenderemos hoy?", color = Color.White)
+                                    Spacer(Modifier.height(8.dp))
+                                    Text("¡Vamos a jugar y aprender! 🚀", color = Color.White)
+                                }
+                                Text("🧒", fontSize = 48.sp)
+                            }
+                        }
+                        Spacer(Modifier.height(24.dp))
+                        Text("¡Elige tu aventura! 🚀", fontSize = 21.sp, fontWeight = FontWeight.ExtraBold, color = TextoOscuro)
                         Spacer(Modifier.height(14.dp))
-
-                        LinearProgressIndicator(
-                            progress = { 0.6f },
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .height(10.dp),
-                            color = Verde,
-                            trackColor = Color(0xFFE8F2E9),
-                            strokeCap = androidx.compose.ui.graphics.StrokeCap.Round
-                        )
-
-                        Spacer(Modifier.height(8.dp))
-
-                        Text(
-                            text = "¡Vas genial! 🌟 60%",
-                            color = Color(0xFF258C58),
-                            fontWeight = FontWeight.Bold
-                        )
-                    }
-                }
-
-                if (asignaturaSeleccionada.isNotEmpty()) {
-                    Spacer(Modifier.height(16.dp))
-
-                    Card(
-                        modifier = Modifier.fillMaxWidth(),
-                        shape = RoundedCornerShape(18.dp),
-                        colors = CardDefaults.cardColors(
-                            containerColor = Color(0xFFE8F0FF)
-                        )
-                    ) {
-                        Column(Modifier.padding(16.dp)) {
-                            Text(
-                                text = asignaturaSeleccionada,
-                                fontWeight = FontWeight.Bold,
-                                color = Azul
-                            )
-                            Spacer(Modifier.height(6.dp))
-                            Text(
-                                text = "Aquí agregaremos las unidades, el material y las actividades."
-                            )
-                            TextButton(
-                                onClick = { asignaturaSeleccionada = "" }
-                            ) {
-                                Text("Volver")
+                        Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                            TarjetaAsignatura("📚", "Lenguaje", "¡Lee y descubre!", Rosado, Modifier.weight(1f)) {
+                                asignaturaSeleccionada = "Lenguaje y Comunicación"; unidadSeleccionada = ""; temaSeleccionado = ""; seccion = "Aprender"
+                            }
+                            TarjetaAsignatura("🔢", "Matemática", "¡Juega con números!", Amarillo, Modifier.weight(1f)) {
+                                asignaturaSeleccionada = "Matemática"; unidadSeleccionada = ""; temaSeleccionado = ""; seccion = "Aprender"
+                            }
+                        }
+                        Spacer(Modifier.height(12.dp))
+                        Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                            TarjetaAsignatura("🌱", "Ciencias", "¡Explora el mundo!", Verde, Modifier.weight(1f)) {
+                                asignaturaSeleccionada = "Ciencias Naturales"; unidadSeleccionada = ""; temaSeleccionado = ""; seccion = "Aprender"
+                            }
+                            TarjetaAsignatura("🌎", "Historia", "¡Conoce tu mundo!", Morado, Modifier.weight(1f)) {
+                                asignaturaSeleccionada = "Historia, Geografía y Ciencias Sociales"; unidadSeleccionada = ""; temaSeleccionado = ""; seccion = "Aprender"
+                            }
+                        }
+                        Spacer(Modifier.height(22.dp))
+                        Card(
+                            modifier = Modifier.fillMaxWidth(),
+                            shape = RoundedCornerShape(24.dp),
+                            colors = CardDefaults.cardColors(containerColor = Color.White)
+                        ) {
+                            Column(Modifier.padding(18.dp)) {
+                                Text("⭐ ¡Miro aparecerá aquí cuando completes actividades.", color = Color.Gray, fontSize = 13.sp)
                             }
                         }
                     }
+                    "Aprender" -> {
+                        Text("📖 Aprender", fontSize = 25.sp, fontWeight = FontWeight.ExtraBold, color = Azul)
+                        Spacer(Modifier.height(8.dp))
+                        if (asignaturaSeleccionada.isBlank()) {
+                            Text("Selecciona una asignatura para ver sus unidades.", color = TextoOscuro)
+                            Spacer(Modifier.height(18.dp))
+                            TarjetaPanel("📚", "Lenguaje y Comunicación", "Lectura, escritura y comprensión.", Rosado) { asignaturaSeleccionada = "Lenguaje y Comunicación" }
+                            TarjetaPanel("🔢", "Matemática", "Números y resolución de problemas.", Amarillo) { asignaturaSeleccionada = "Matemática" }
+                            TarjetaPanel("🌱", "Ciencias Naturales", "Explora y descubre el mundo.", Verde) { asignaturaSeleccionada = "Ciencias Naturales" }
+                            TarjetaPanel("🌎", "Historia y Geografía", "Conoce la historia y nuestro entorno.", Morado) { asignaturaSeleccionada = "Historia, Geografía y Ciencias Sociales" }
+                        } else {
+                            Text(asignaturaSeleccionada, fontSize = 18.sp, fontWeight = FontWeight.Bold, color = TextoOscuro)
+                            TextButton(onClick = { volverAAsignaturas() }) { Text("← Todas las asignaturas") }
+                            val unidades = contenidos[asignaturaSeleccionada].orEmpty()
+                            if (unidadSeleccionada.isBlank()) {
+                                Text("Selecciona una unidad:", fontWeight = FontWeight.SemiBold)
+                                Spacer(Modifier.height(12.dp))
+                                unidades.forEachIndexed { indice, unidad ->
+                                    TarjetaPanel("📘", unidad.first, "${unidad.second.size} temas para aprender", if (indice % 2 == 0) Color(0xFFDCEAFF) else Color(0xFFE9DEFF)) {
+                                        unidadSeleccionada = unidad.first
+                                    }
+                                }
+                            } else if (temaSeleccionado.isBlank()) {
+                                TextButton(onClick = { unidadSeleccionada = "" }) { Text("← Volver a unidades") }
+                                Text(unidadSeleccionada, fontSize = 18.sp, fontWeight = FontWeight.Bold, color = Azul)
+                                Spacer(Modifier.height(12.dp))
+                                val temas = unidades.firstOrNull { it.first == unidadSeleccionada }?.second.orEmpty()
+                                temas.forEachIndexed { indice, tema ->
+                                    TarjetaPanel("✏️", "Tema ${indice + 1}: $tema", "Toca para revisar el contenido.", Color(0xFFFFF0CC)) {
+                                        temaSeleccionado = tema
+                                    }
+                                }
+                            } else {
+                                TextButton(onClick = { temaSeleccionado = "" }) { Text("← Volver a temas") }
+                                Card(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    shape = RoundedCornerShape(22.dp),
+                                    colors = CardDefaults.cardColors(containerColor = Color.White)
+                                ) {
+                                    Column(Modifier.padding(20.dp)) {
+                                        Text("🌟 $temaSeleccionado", fontSize = 20.sp, fontWeight = FontWeight.Bold, color = Azul)
+                                        Spacer(Modifier.height(12.dp))
+                                        Text("¡Bienvenido/a a este tema!", fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
+                                        Spacer(Modifier.height(8.dp))
+                                        Text("Aquí podrás revisar la explicación y aprender paso a paso. Este contenido es una demostración local; más adelante se incorporarán los materiales y actividades reales.", color = TextoOscuro)
+                                        Spacer(Modifier.height(16.dp))
+                                        Text("📎 Materiales", fontWeight = FontWeight.Bold, color = Azul)
+                                        Text("Aún no hay archivos adjuntos para este tema.", color = Color.Gray)
+                                        Spacer(Modifier.height(12.dp))
+                                        Text("📝 Actividad", fontWeight = FontWeight.Bold, color = Azul)
+                                        Text("Las actividades de práctica se incorporarán en la siguiente etapa.", color = Color.Gray)
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    "Mis logros" -> {
+                        Text("🏆 Mis logros", fontSize = 25.sp, fontWeight = FontWeight.ExtraBold, color = Morado)
+                        Spacer(Modifier.height(10.dp))
+                        Text("¡Descubre todo lo que has conseguido!", color = TextoOscuro)
+                        Spacer(Modifier.height(20.dp))
+                        TarjetaPanel("⭐", "Mis actividades", "Consulta tus actividades completadas.", Amarillo) { temaSeleccionado = "Mis actividades" }
+                        TarjetaPanel("📝", "Mis evaluaciones", "Consulta tus evaluaciones y resultados.", Rosado) { temaSeleccionado = "Mis evaluaciones" }
+                        TarjetaPanel("📊", "Mi progreso", "Revisa tus avances de aprendizaje.", Verde) { temaSeleccionado = "Mi progreso" }
+                        if (temaSeleccionado.isNotBlank()) {
+                            Spacer(Modifier.height(16.dp))
+                            Card(modifier = Modifier.fillMaxWidth(), colors = CardDefaults.cardColors(containerColor = Color.White)) {
+                                Column(Modifier.padding(18.dp)) {
+                                    Text(temaSeleccionado, fontWeight = FontWeight.Bold, color = Azul)
+                                    Spacer(Modifier.height(8.dp))
+                                    Text("Aquí se mostrarán tus resultados cuando estén implementados.")
+                                }
+                            }
+                        }
+                    }
+                    "Perfil" -> {
+                        Text("😊 Mi perfil", fontSize = 25.sp, fontWeight = FontWeight.ExtraBold, color = Morado)
+                        Spacer(Modifier.height(20.dp))
+                        Card(modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(22.dp), colors = CardDefaults.cardColors(containerColor = Color.White)) {
+                            Column(Modifier.padding(20.dp)) {
+                                Text("👤 Información personal", fontSize = 19.sp, fontWeight = FontWeight.Bold, color = Azul)
+                                Spacer(Modifier.height(16.dp))
+                                Text("Nombre completo", color = Color.Gray)
+                                Text(nombre, fontWeight = FontWeight.Bold, fontSize = 17.sp)
+                                Spacer(Modifier.height(12.dp))
+                                Text("Tipo de usuario", color = Color.Gray)
+                                Text("Estudiante", fontWeight = FontWeight.Bold, fontSize = 17.sp)
+                            }
+                        }
+                        Spacer(Modifier.height(24.dp))
+                        Button(onClick = onCerrarSesion, modifier = Modifier.fillMaxWidth().height(54.dp), shape = RoundedCornerShape(16.dp), colors = ButtonDefaults.buttonColors(containerColor = Azul)) {
+                            Text("Cerrar sesión", fontWeight = FontWeight.Bold)
+                        }
+                    }
                 }
-
-                Spacer(Modifier.height(18.dp))
-
-                OutlinedButton(
-                    onClick = onCerrarSesion,
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Text("Cerrar sesión")
-                }
-
-                Spacer(Modifier.height(12.dp))
             }
-
             NavigationBar(containerColor = Color.White) {
-                val opciones = listOf(
-                    "Inicio" to "🏠",
-                    "Aprender" to "📖",
-                    "Mis logros" to "🏆",
-                    "Perfil" to "😊"
-                )
-
+                val opciones = listOf("Inicio" to "🏠", "Aprender" to "📖", "Mis logros" to "🏆", "Perfil" to "😊")
                 opciones.forEach { (nombreOpcion, emoji) ->
                     NavigationBarItem(
                         selected = seccion == nombreOpcion,
-                        onClick = { seccion = nombreOpcion },
+                        onClick = {
+                            seccion = nombreOpcion
+                            if (nombreOpcion != "Aprender") { asignaturaSeleccionada = ""; unidadSeleccionada = ""; temaSeleccionado = "" }
+                            if (nombreOpcion == "Aprender") { unidadSeleccionada = ""; temaSeleccionado = "" }
+                        },
                         icon = { Text(emoji, fontSize = 20.sp) },
                         label = { Text(nombreOpcion, fontSize = 10.sp) },
-                        colors = NavigationBarItemDefaults.colors(
-                            selectedIconColor = Azul,
-                            indicatorColor = Color(0xFFDCEAFF),
-                            selectedTextColor = Azul
-                        )
+                        colors = NavigationBarItemDefaults.colors(selectedIconColor = Azul, indicatorColor = Color(0xFFDCEAFF), selectedTextColor = Azul)
                     )
                 }
             }
@@ -779,9 +795,24 @@ fun TarjetaAsignatura(
 
 @Composable
 fun PantallaProfesor(
+    profesorId: Int,
+    materialRepository: com.example.mpaz_pro_1.data.MaterialRepository,
+    asignacionCursoDao: com.example.mpaz_pro_1.data.AsignacionCursoDao,
     onCerrarSesion: () -> Unit,
     onAbrirMisCursos: () -> Unit
 ) {
+    var mostrarCarga by remember { mutableStateOf(false) }
+
+    if (mostrarCarga) {
+        PantallaCargaMaterial(
+            profesorId = profesorId,
+            materialRepository = materialRepository,
+            asignacionCursoDao = asignacionCursoDao,
+            onVolver = { mostrarCarga = false }
+        )
+        return
+    }
+
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -799,13 +830,7 @@ fun PantallaProfesor(
         Text("Panel del profesor", fontSize = 17.sp)
 
         Spacer(Modifier.height(22.dp))
-
-        Text(
-            "Tu espacio de trabajo",
-            fontSize = 21.sp,
-            fontWeight = FontWeight.Bold
-        )
-
+        Text("Tu espacio de trabajo", fontSize = 21.sp, fontWeight = FontWeight.Bold)
         Spacer(Modifier.height(14.dp))
 
         TarjetaPanel(
@@ -816,9 +841,9 @@ fun PantallaProfesor(
 
         TarjetaPanel(
             "📚", "Material educativo",
-            "Consulta el material publicado por UTP.",
+            "Carga PDF y envíalos a revisión de UTP.",
             Color(0xFFDCEAFF)
-        ) { mostrarFuncionFutura("Material educativo") }
+        ) { mostrarCarga = true }
 
         TarjetaPanel(
             "📝", "Actividades y evaluaciones",
@@ -828,19 +853,195 @@ fun PantallaProfesor(
 
         TarjetaPanel(
             "📊", "Resultados del curso",
-            "Aquí mostraremos los avances de los estudiantes.",
+            "Consulta los avances de los estudiantes.",
             Color(0xFFD9FBE6)
         ) { mostrarFuncionFutura("Resultados del curso") }
 
         Spacer(Modifier.height(20.dp))
-
-        Button(
-            onClick = onCerrarSesion,
-            modifier = Modifier.fillMaxWidth()
-        ) {
+        Button(onClick = onCerrarSesion, modifier = Modifier.fillMaxWidth()) {
             Text("Cerrar sesión")
         }
     }
+}
+
+@Composable
+fun PantallaCargaMaterial(
+    profesorId: Int,
+    materialRepository: com.example.mpaz_pro_1.data.MaterialRepository,
+    asignacionCursoDao: com.example.mpaz_pro_1.data.AsignacionCursoDao,
+    onVolver: () -> Unit
+) {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    var cursos by remember { mutableStateOf(emptyList<com.example.mpaz_pro_1.data.Curso>()) }
+    var cursoSeleccionado by remember { mutableStateOf<com.example.mpaz_pro_1.data.Curso?>(null) }
+    var menuCursos by remember { mutableStateOf(false) }
+    var asignatura by remember { mutableStateOf("") }
+    var unidad by remember { mutableStateOf("") }
+    var tema by remember { mutableStateOf("") }
+    var descripcion by remember { mutableStateOf("") }
+    var nombreArchivo by remember { mutableStateOf("") }
+    var rutaArchivo by remember { mutableStateOf("") }
+    var mensaje by remember { mutableStateOf("") }
+    var guardando by remember { mutableStateOf(false) }
+    var materiales by remember { mutableStateOf(emptyList<com.example.mpaz_pro_1.data.MaterialEducativo>()) }
+
+    LaunchedEffect(profesorId) {
+        try {
+            cursos = asignacionCursoDao.obtenerCursosDelProfesor(profesorId)
+            materiales = materialRepository.obtenerMaterialesProfesor(profesorId)
+        } catch (e: Exception) {
+            mensaje = e.message ?: "No se pudieron cargar los cursos."
+        }
+    }
+
+    val selectorPdf = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.OpenDocument()
+    ) { uri: Uri? ->
+        if (uri != null) {
+            scope.launch {
+                try {
+                    val resultado = withContext(Dispatchers.IO) {
+                        copiarPdfAlAlmacenamiento(context, uri)
+                    }
+                    nombreArchivo = resultado.first
+                    rutaArchivo = resultado.second
+                    mensaje = "PDF seleccionado correctamente."
+                } catch (e: Exception) {
+                    mensaje = e.message ?: "No se pudo copiar el PDF."
+                }
+            }
+        }
+    }
+
+    Column(
+        modifier = Modifier.fillMaxSize().background(Fondo)
+            .verticalScroll(rememberScrollState()).padding(20.dp)
+    ) {
+        TextButton(onClick = onVolver) { Text("← Volver al panel") }
+        Text("📄 Cargar material educativo", fontSize = 25.sp,
+            fontWeight = FontWeight.ExtraBold, color = Azul)
+        Text("Los materiales se guardan como borrador y luego se envían a UTP.",
+            color = TextoOscuro)
+        Spacer(Modifier.height(18.dp))
+
+        Card(colors = CardDefaults.cardColors(containerColor = Color.White)) {
+            Column(Modifier.padding(16.dp)) {
+                Text("Curso asignado", fontWeight = FontWeight.Bold)
+                Spacer(Modifier.height(6.dp))
+                Box {
+                    OutlinedButton(onClick = { menuCursos = true }, modifier = Modifier.fillMaxWidth()) {
+                        Text(cursoSeleccionado?.let { "${it.nombre} · ${it.nivel} ${it.seccion}" }
+                            ?: "Seleccionar curso")
+                    }
+                    DropdownMenu(expanded = menuCursos, onDismissRequest = { menuCursos = false }) {
+                        cursos.forEach { curso ->
+                            DropdownMenuItem(
+                                text = { Text("${curso.nombre} · ${curso.nivel} ${curso.seccion}") },
+                                onClick = { cursoSeleccionado = curso; menuCursos = false }
+                            )
+                        }
+                    }
+                }
+                if (cursos.isEmpty()) {
+                    Text("No tienes cursos asignados. Solicita a UTP que te asigne uno.",
+                        color = Color(0xFFD32F2F), fontSize = 12.sp)
+                }
+                Spacer(Modifier.height(10.dp))
+                OutlinedTextField(asignatura, { asignatura = it }, label = { Text("Asignatura") }, modifier = Modifier.fillMaxWidth())
+                OutlinedTextField(unidad, { unidad = it }, label = { Text("Unidad") }, modifier = Modifier.fillMaxWidth())
+                OutlinedTextField(tema, { tema = it }, label = { Text("Tema") }, modifier = Modifier.fillMaxWidth())
+                OutlinedTextField(descripcion, { descripcion = it }, label = { Text("Descripción") }, modifier = Modifier.fillMaxWidth(), minLines = 2)
+                Spacer(Modifier.height(12.dp))
+                OutlinedButton(
+                    onClick = { selectorPdf.launch(arrayOf("application/pdf")) },
+                    modifier = Modifier.fillMaxWidth()
+                ) { Text(if (nombreArchivo.isBlank()) "Seleccionar archivo PDF" else "📎 $nombreArchivo") }
+                if (mensaje.isNotBlank()) {
+                    Spacer(Modifier.height(8.dp))
+                    Text(mensaje, color = Azul, fontSize = 13.sp)
+                }
+                Spacer(Modifier.height(14.dp))
+                Button(
+                    enabled = !guardando && cursoSeleccionado != null && asignatura.isNotBlank() &&
+                            unidad.isNotBlank() && tema.isNotBlank() && nombreArchivo.isNotBlank(),
+                    modifier = Modifier.fillMaxWidth(),
+                    onClick = {
+                        scope.launch {
+                            guardando = true
+                            try {
+                                materialRepository.crearMaterial(
+                                    profesorId = profesorId,
+                                    cursoId = cursoSeleccionado!!.id,
+                                    asignatura = asignatura.trim(),
+                                    unidad = unidad.trim(),
+                                    tema = tema.trim(),
+                                    descripcion = descripcion.trim(),
+                                    nombreArchivo = nombreArchivo,
+                                    rutaArchivo = rutaArchivo
+                                )
+                                materiales = materialRepository.obtenerMaterialesProfesor(profesorId)
+                                asignatura = ""; unidad = ""; tema = ""; descripcion = ""
+                                nombreArchivo = ""; rutaArchivo = ""
+                                mensaje = "Material guardado como BORRADOR. Ya puedes enviarlo a UTP."
+                            } catch (e: Exception) {
+                                mensaje = e.message ?: "No se pudo guardar el material."
+                            } finally { guardando = false }
+                        }
+                    }
+                ) { Text(if (guardando) "Guardando..." else "Guardar borrador") }
+            }
+        }
+
+        Spacer(Modifier.height(20.dp))
+        Text("Mis materiales", fontSize = 20.sp, fontWeight = FontWeight.Bold, color = Azul)
+        Spacer(Modifier.height(8.dp))
+        if (materiales.isEmpty()) {
+            Text("Todavía no has cargado materiales.", color = TextoOscuro)
+        } else {
+            materiales.forEach { material ->
+                Card(modifier = Modifier.fillMaxWidth().padding(bottom = 10.dp),
+                    colors = CardDefaults.cardColors(containerColor = Color.White)) {
+                    Column(Modifier.padding(14.dp)) {
+                        Text(material.tema, fontWeight = FontWeight.Bold)
+                        Text("${material.asignatura} · ${material.unidad}", fontSize = 13.sp)
+                        Text("${material.nombreArchivo} · ${material.estado}", fontSize = 12.sp, color = Azul)
+                        if (material.estado == "BORRADOR" || material.estado == "DEVUELTO") {
+                            TextButton(onClick = {
+                                scope.launch {
+                                    val enviado = materialRepository.enviarARevision(material.id, profesorId)
+                                    materiales = materialRepository.obtenerMaterialesProfesor(profesorId)
+                                    mensaje = if (enviado) "Material enviado a revisión de UTP." else "No se pudo enviar el material."
+                                }
+                            }) { Text("Enviar a revisión de UTP") }
+                        }
+                        if (material.observacionUtp.isNotBlank()) {
+                            Text("Observación UTP: ${material.observacionUtp}", color = Color(0xFFD32F2F), fontSize = 12.sp)
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+private fun copiarPdfAlAlmacenamiento(context: Context, uri: Uri): Pair<String, String> {
+    var nombre = "material_${System.currentTimeMillis()}.pdf"
+    context.contentResolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)?.use { cursor ->
+        if (cursor.moveToFirst()) {
+            val index = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME)
+            if (index >= 0) nombre = cursor.getString(index) ?: nombre
+        }
+    }
+    require(nombre.endsWith(".pdf", ignoreCase = true)) { "El archivo seleccionado no es un PDF." }
+    val carpeta = File(context.filesDir, "materiales").apply { mkdirs() }
+    val destino = File(carpeta, "${System.currentTimeMillis()}_$nombre")
+    val input = context.contentResolver.openInputStream(uri)
+        ?: throw IllegalStateException("No se pudo abrir el PDF seleccionado.")
+    input.use { source ->
+        destino.outputStream().use { output -> source.copyTo(output) }
+    }
+    return nombre to destino.absolutePath
 }
 
 @Composable
@@ -907,14 +1108,57 @@ fun PantallaMisCursos(onVolver: () -> Unit) {
 }
 
 private fun mostrarFuncionFutura(seccion: String) {
-    // Las demás secciones se implementarán en los siguientes pasos.
+// Las demás secciones se implementarán en los siguientes pasos.
 }
 
 // PANEL UTP
 
 @Composable
-fun PantallaUTP(onCerrarSesion: () -> Unit) {
+fun PantallaUTP(
+    usuarioDao: com.example.mpaz_pro_1.data.UsuarioDao,
+    registroRepository: com.example.mpaz_pro_1.data.RegistroRepository,
+    cursoDao: com.example.mpaz_pro_1.data.CursoDao,
+    onCerrarSesion: () -> Unit
+) {
+    val scope = rememberCoroutineScope()
     var seccion by remember { mutableStateOf("Inicio") }
+    var usuarios by remember { mutableStateOf(emptyList<com.example.mpaz_pro_1.data.Usuario>()) }
+    var filtro by remember { mutableStateOf("Todos") }
+    var mostrarFormulario by remember { mutableStateOf(false) }
+    var nombreNuevo by remember { mutableStateOf("") }
+    var correoNuevo by remember { mutableStateOf("") }
+    var claveNueva by remember { mutableStateOf("") }
+    var rolNuevo by remember { mutableStateOf("Profesor") }
+    var cargando by remember { mutableStateOf(false) }
+    var mensaje by remember { mutableStateOf("") }
+    var esError by remember { mutableStateOf(false) }
+    var cursos by remember { mutableStateOf(emptyList<com.example.mpaz_pro_1.data.Curso>()) }
+    var mostrarFormularioCurso by remember { mutableStateOf(false) }
+    var nombreCurso by remember { mutableStateOf("") }
+    var nivelCurso by remember { mutableStateOf("1° Básico") }
+    var seccionCurso by remember { mutableStateOf("A") }
+
+    suspend fun cargarUsuarios() {
+        usuarios = usuarioDao.obtenerTodos()
+    }
+
+    suspend fun cargarCursos() {
+        cursos = cursoDao.obtenerActivos()
+    }
+
+    LaunchedEffect(seccion) {
+        try {
+            if (seccion == "Usuarios y roles") cargarUsuarios()
+            if (seccion == "Cursos y asignaturas") cargarCursos()
+        } catch (e: Exception) {
+            mensaje = e.localizedMessage ?: "No se pudo cargar la información."
+            esError = true
+        }
+    }
+
+    val usuariosFiltrados = usuarios.filter {
+        filtro == "Todos" || it.rol.equals(filtro, ignoreCase = true)
+    }
 
     Column(
         modifier = Modifier
@@ -930,51 +1174,306 @@ fun PantallaUTP(onCerrarSesion: () -> Unit) {
             fontWeight = FontWeight.ExtraBold,
             color = Morado
         )
-        Text("Panel de gestión educativa", fontSize = 17.sp)
+        Text("Panel de gestión educativa", fontSize = 17.sp, color = TextoOscuro)
+        Spacer(Modifier.height(20.dp))
 
-        Spacer(Modifier.height(22.dp))
+        if (seccion == "Inicio") {
+            TarjetaPanel(
+                "👥", "Usuarios y roles",
+                "Consulta y administra estudiantes y profesores.",
+                Color(0xFFDCEAFF)
+            ) { seccion = "Usuarios y roles" }
 
-        TarjetaPanel(
-            "👥", "Usuarios y roles",
-            "Administración de estudiantes y profesores.",
-            Color(0xFFDCEAFF)
-        ) { seccion = "Usuarios y roles" }
+            TarjetaPanel(
+                "🏫", "Cursos y asignaturas",
+                "Organiza cursos y asignaturas.",
+                Color(0xFFFFE0ED)
+            ) { seccion = "Cursos y asignaturas" }
 
-        TarjetaPanel(
-            "🏫", "Cursos y asignaturas",
-            "Organiza cursos y asignaturas.",
-            Color(0xFFFFE0ED)
-        ) { seccion = "Cursos y asignaturas" }
+            TarjetaPanel(
+                "📖", "Material educativo",
+                "Carga y organiza recursos educativos.",
+                Color(0xFFD9FBE6)
+            ) { seccion = "Material educativo" }
 
-        TarjetaPanel(
-            "📖", "Material educativo",
-            "Carga y organiza recursos educativos.",
-            Color(0xFFD9FBE6)
-        ) { seccion = "Material educativo" }
+            TarjetaPanel(
+                "✅", "Revisión y publicación",
+                "Revisa y aprueba material antes de publicarlo.",
+                Color(0xFFE9DEFF)
+            ) { seccion = "Revisión y publicación" }
+        } else {
+            TextButton(onClick = {
+                seccion = "Inicio"
+                mensaje = ""
+            }) { Text("← Volver al panel UTP") }
 
-        TarjetaPanel(
-            "✅", "Revisión y publicación",
-            "Revisa y aprueba material antes de publicarlo.",
-            Color(0xFFE9DEFF)
-        ) { seccion = "Revisión y publicación" }
-
-        if (seccion != "Inicio") {
-            Spacer(Modifier.height(16.dp))
             Text(
-                text = seccion,
-                fontSize = 20.sp,
+                seccion,
+                fontSize = 23.sp,
                 fontWeight = FontWeight.Bold,
                 color = Morado
             )
-            Text("Esta sección se implementará en los siguientes pasos.")
+            Spacer(Modifier.height(12.dp))
+
+            if (seccion == "Usuarios y roles") {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text("Usuarios registrados: ${usuarios.size}", fontWeight = FontWeight.SemiBold)
+                    Button(onClick = {
+                        nombreNuevo = ""
+                        correoNuevo = ""
+                        claveNueva = ""
+                        rolNuevo = "Profesor"
+                        mensaje = ""
+                        mostrarFormulario = true
+                    }) { Text("＋ Crear usuario") }
+                }
+                Spacer(Modifier.height(10.dp))
+
+                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    listOf("Todos", "Estudiante", "Profesor", "UTP").forEach { opcion ->
+                        FilterChip(
+                            selected = filtro == opcion,
+                            onClick = { filtro = opcion },
+                            label = { Text(opcion) }
+                        )
+                    }
+                }
+                Spacer(Modifier.height(12.dp))
+
+                if (usuariosFiltrados.isEmpty()) {
+                    Text("No hay usuarios para mostrar.", color = Color.Gray)
+                } else {
+                    usuariosFiltrados.forEach { usuario ->
+                        Card(
+                            modifier = Modifier.fillMaxWidth().padding(bottom = 9.dp),
+                            colors = CardDefaults.cardColors(containerColor = Color.White)
+                        ) {
+                            Column(Modifier.padding(14.dp)) {
+                                Text(usuario.nombre, fontWeight = FontWeight.Bold, color = TextoOscuro)
+                                Text(usuario.correo, color = Color.Gray, fontSize = 13.sp)
+                                Text("Perfil: ${usuario.rol}", color = Azul, fontSize = 13.sp)
+                            }
+                        }
+                    }
+                }
+
+                if (mostrarFormulario) {
+                    AlertDialog(
+                        onDismissRequest = { if (!cargando) mostrarFormulario = false },
+                        title = { Text("Crear usuario") },
+                        text = {
+                            Column {
+                                OutlinedTextField(
+                                    value = nombreNuevo,
+                                    onValueChange = { nombreNuevo = it },
+                                    label = { Text("Nombre completo") },
+                                    singleLine = true
+                                )
+                                Spacer(Modifier.height(8.dp))
+                                OutlinedTextField(
+                                    value = correoNuevo,
+                                    onValueChange = { correoNuevo = it },
+                                    label = { Text("Correo") },
+                                    singleLine = true,
+                                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Email)
+                                )
+                                Spacer(Modifier.height(8.dp))
+                                OutlinedTextField(
+                                    value = claveNueva,
+                                    onValueChange = { claveNueva = it },
+                                    label = { Text("Contraseña (mínimo 8)") },
+                                    singleLine = true,
+                                    visualTransformation = PasswordVisualTransformation()
+                                )
+                                Spacer(Modifier.height(8.dp))
+                                Text("Perfil")
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    RadioButton(
+                                        selected = rolNuevo == "Profesor",
+                                        onClick = { rolNuevo = "Profesor" }
+                                    )
+                                    Text("Profesor")
+                                    RadioButton(
+                                        selected = rolNuevo == "Estudiante",
+                                        onClick = { rolNuevo = "Estudiante" }
+                                    )
+                                    Text("Estudiante")
+                                }
+                                if (mensaje.isNotBlank()) {
+                                    Text(
+                                        mensaje,
+                                        color = if (esError) Color(0xFFD32F2F) else Color(0xFF258C58),
+                                        fontSize = 12.sp
+                                    )
+                                }
+                            }
+                        },
+                        confirmButton = {
+                            TextButton(
+                                enabled = !cargando,
+                                onClick = {
+                                    scope.launch {
+                                        cargando = true
+                                        mensaje = ""
+                                        try {
+                                            when (
+                                                val resultado = registroRepository.registrarUsuario(
+                                                    nombre = nombreNuevo,
+                                                    correo = correoNuevo,
+                                                    clave = claveNueva,
+                                                    rol = rolNuevo
+                                                )
+                                            ) {
+                                                com.example.mpaz_pro_1.data.ResultadoRegistro.Exito -> {
+                                                    cargarUsuarios()
+                                                    mostrarFormulario = false
+                                                    mensaje = "Usuario creado correctamente."
+                                                    esError = false
+                                                }
+                                                is com.example.mpaz_pro_1.data.ResultadoRegistro.Error -> {
+                                                    mensaje = resultado.mensaje
+                                                    esError = true
+                                                }
+                                            }
+                                        } catch (e: Exception) {
+                                            mensaje = e.localizedMessage ?: "No se pudo crear el usuario."
+                                            esError = true
+                                        } finally {
+                                            cargando = false
+                                        }
+                                    }
+                                }
+                            ) { Text(if (cargando) "Guardando..." else "Crear") }
+                        },
+                        dismissButton = {
+                            TextButton(
+                                enabled = !cargando,
+                                onClick = { mostrarFormulario = false; mensaje = "" }
+                            ) { Text("Cancelar") }
+                        }
+                    )
+                }
+                if (mensaje.isNotBlank() && !mostrarFormulario) {
+                    Text(mensaje, color = if (esError) Color(0xFFD32F2F) else Color(0xFF258C58))
+                }
+            } else if (seccion == "Cursos y asignaturas") {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text("Cursos activos: ${cursos.size}", fontWeight = FontWeight.SemiBold)
+                    Button(onClick = {
+                        nombreCurso = ""
+                        nivelCurso = "1° Básico"
+                        seccionCurso = "A"
+                        mensaje = ""
+                        mostrarFormularioCurso = true
+                    }) { Text("＋ Crear curso") }
+                }
+                Spacer(Modifier.height(12.dp))
+                if (cursos.isEmpty()) {
+                    Text("Todavía no hay cursos activos registrados.", color = Color.Gray)
+                } else {
+                    cursos.forEach { curso ->
+                        Card(
+                            modifier = Modifier.fillMaxWidth().padding(bottom = 9.dp),
+                            colors = CardDefaults.cardColors(containerColor = Color.White)
+                        ) {
+                            Column(Modifier.padding(14.dp)) {
+                                Text(curso.nombre, fontWeight = FontWeight.Bold, color = TextoOscuro)
+                                Text("Nivel: ${curso.nivel}  •  Sección: ${curso.seccion}", color = Color.Gray)
+                                Text("Estado: Activo", color = Verde, fontSize = 13.sp)
+                            }
+                        }
+                    }
+                }
+                if (mostrarFormularioCurso) {
+                    AlertDialog(
+                        onDismissRequest = { if (!cargando) mostrarFormularioCurso = false },
+                        title = { Text("Registrar curso") },
+                        text = {
+                            Column {
+                                OutlinedTextField(
+                                    value = nombreCurso,
+                                    onValueChange = { nombreCurso = it },
+                                    label = { Text("Nombre del curso") },
+                                    singleLine = true
+                                )
+                                Spacer(Modifier.height(8.dp))
+                                OutlinedTextField(
+                                    value = nivelCurso,
+                                    onValueChange = { nivelCurso = it },
+                                    label = { Text("Nivel (ej. 1° Básico)") },
+                                    singleLine = true
+                                )
+                                Spacer(Modifier.height(8.dp))
+                                OutlinedTextField(
+                                    value = seccionCurso,
+                                    onValueChange = { seccionCurso = it },
+                                    label = { Text("Sección (ej. A)") },
+                                    singleLine = true
+                                )
+                                if (mensaje.isNotBlank()) {
+                                    Spacer(Modifier.height(6.dp))
+                                    Text(mensaje, color = if (esError) Color(0xFFD32F2F) else Verde)
+                                }
+                            }
+                        },
+                        confirmButton = {
+                            TextButton(enabled = !cargando, onClick = {
+                                if (nombreCurso.isBlank() || nivelCurso.isBlank() || seccionCurso.isBlank()) {
+                                    mensaje = "Completa nombre, nivel y sección."
+                                    esError = true
+                                } else {
+                                    scope.launch {
+                                        cargando = true
+                                        mensaje = ""
+                                        try {
+                                            cursoDao.insertar(
+                                                com.example.mpaz_pro_1.data.Curso(
+                                                    nombre = nombreCurso.trim(),
+                                                    nivel = nivelCurso.trim(),
+                                                    seccion = seccionCurso.trim().uppercase()
+                                                )
+                                            )
+                                            cargarCursos()
+                                            mostrarFormularioCurso = false
+                                            mensaje = "Curso registrado correctamente."
+                                            esError = false
+                                        } catch (e: Exception) {
+                                            mensaje = "No se pudo registrar. Verifica que el nombre del curso no esté repetido."
+                                            esError = true
+                                        } finally {
+                                            cargando = false
+                                        }
+                                    }
+                                }
+                            }) { Text(if (cargando) "Guardando..." else "Guardar curso") }
+                        },
+                        dismissButton = {
+                            TextButton(enabled = !cargando, onClick = { mostrarFormularioCurso = false; mensaje = "" }) { Text("Cancelar") }
+                        }
+                    )
+                }
+                if (mensaje.isNotBlank() && !mostrarFormularioCurso) {
+                    Text(mensaje, color = if (esError) Color(0xFFD32F2F) else Color(0xFF258C58))
+                }
+            } else if (seccion == "Material educativo") {
+                Text("Módulo de materiales educativos", fontWeight = FontWeight.Bold, color = TextoOscuro)
+                Text("Aquí se implementará la carga de PDF por UTP y su asignación a curso y profesor.", color = TextoOscuro)
+            } else if (seccion == "Revisión y publicación") {
+                Text("Módulo de revisión y publicación", fontWeight = FontWeight.Bold, color = TextoOscuro)
+                Text("Aquí se mostrarán los PDF para revisar y publicar a los estudiantes.", color = TextoOscuro)
+            }
         }
 
         Spacer(Modifier.height(20.dp))
-
-        Button(
-            onClick = onCerrarSesion,
-            modifier = Modifier.fillMaxWidth()
-        ) {
+        Button(onClick = onCerrarSesion, modifier = Modifier.fillMaxWidth()) {
             Text("Cerrar sesión")
         }
     }
@@ -1020,3 +1519,130 @@ fun TarjetaPanel(
     }
 }
 
+// CREACIÓN TEMPORAL DE CUENTA UTP DE PRUEBA
+
+@Composable
+fun PantallaCrearCuentaUTP(
+    cargando: Boolean,
+    mensaje: String,
+    mensajeEsError: Boolean,
+    onVolver: () -> Unit,
+    onCrear: (String, String, String) -> Unit
+) {
+    var nombre by remember { mutableStateOf("") }
+    var correo by remember { mutableStateOf("") }
+    var clave by remember { mutableStateOf("") }
+
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(Fondo)
+            .verticalScroll(rememberScrollState())
+            .padding(24.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.Center
+    ) {
+        Text("📚", fontSize = 60.sp)
+
+        Text(
+            "Crear cuenta UTP",
+            fontSize = 27.sp,
+            fontWeight = FontWeight.ExtraBold,
+            color = Morado
+        )
+
+        Text(
+            "Cuenta de prueba para acceder al panel de gestión educativa",
+            textAlign = TextAlign.Center,
+            color = TextoOscuro
+        )
+
+        Spacer(Modifier.height(24.dp))
+
+        OutlinedTextField(
+            value = nombre,
+            onValueChange = { nombre = it },
+            label = { Text("Nombre completo") },
+            modifier = Modifier.fillMaxWidth(),
+            singleLine = true,
+            shape = RoundedCornerShape(16.dp)
+        )
+
+        Spacer(Modifier.height(12.dp))
+
+        OutlinedTextField(
+            value = correo,
+            onValueChange = { correo = it },
+            label = { Text("Correo electrónico") },
+            modifier = Modifier.fillMaxWidth(),
+            singleLine = true,
+            shape = RoundedCornerShape(16.dp),
+            keyboardOptions = KeyboardOptions(
+                keyboardType = KeyboardType.Email
+            )
+        )
+
+        Spacer(Modifier.height(12.dp))
+
+        OutlinedTextField(
+            value = clave,
+            onValueChange = { clave = it },
+            label = { Text("Contraseña (mínimo 8 caracteres)") },
+            modifier = Modifier.fillMaxWidth(),
+            singleLine = true,
+            shape = RoundedCornerShape(16.dp),
+            visualTransformation = PasswordVisualTransformation(),
+            keyboardOptions = KeyboardOptions(
+                keyboardType = KeyboardType.Password
+            )
+        )
+
+        Spacer(Modifier.height(12.dp))
+
+        if (mensaje.isNotBlank()) {
+            Text(
+                text = mensaje,
+                color = if (mensajeEsError) Color(0xFFD32F2F) else Color(0xFF258C58),
+                textAlign = TextAlign.Center,
+                fontSize = 13.sp
+            )
+        }
+
+        Spacer(Modifier.height(18.dp))
+
+        Button(
+            onClick = { onCrear(nombre, correo, clave) },
+            enabled = !cargando && nombre.isNotBlank() &&
+                    correo.isNotBlank() && clave.length >= 8,
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(54.dp),
+            shape = RoundedCornerShape(18.dp),
+            colors = ButtonDefaults.buttonColors(containerColor = Morado)
+        ) {
+            if (cargando) {
+                CircularProgressIndicator(
+                    modifier = Modifier.size(22.dp),
+                    color = Color.White,
+                    strokeWidth = 2.dp
+                )
+            } else {
+                Text("Crear cuenta UTP")
+            }
+        }
+
+        TextButton(
+            onClick = onVolver,
+            enabled = !cargando
+        ) {
+            Text("Volver al inicio de sesión")
+        }
+
+        Text(
+            "Esta opción es temporal para pruebas locales. No debe quedar disponible en una versión pública.",
+            textAlign = TextAlign.Center,
+            color = Color.Gray,
+            fontSize = 12.sp
+        )
+    }
+}

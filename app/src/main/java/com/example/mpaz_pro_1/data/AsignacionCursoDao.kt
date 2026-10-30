@@ -21,12 +21,27 @@ interface AsignacionCursoDao {
           AND cursos.activo = 1
         ORDER BY cursos.nivel, cursos.seccion
     """)
-    suspend fun obtenerCursosDelProfesor(profesorId: Int): List<Curso>
+    suspend fun obtenerCursosDelProfesor(
+        profesorId: Int
+    ): List<Curso>
 
     @Query("""
         SELECT COUNT(*)
         FROM asignaciones_curso
         WHERE cursoId = :cursoId
     """)
-    suspend fun contarAsignacionesDelCurso(cursoId: Int): Int
+    suspend fun contarAsignacionesDelCurso(
+        cursoId: Int
+    ): Int
+
+    @Query("""
+        SELECT COUNT(*)
+        FROM asignaciones_curso
+        WHERE profesorId = :profesorId
+          AND cursoId = :cursoId
+    """)
+    suspend fun profesorTieneCurso(
+        profesorId: Int,
+        cursoId: Int
+    ): Int
 }
