@@ -97,5 +97,20 @@ interface MaterialEducativoDao {
         WHERE id = :materialId
           AND estado = 'APROBADO'
     """)
-    suspend fun publicar(materialId: Int): Int
+    suspend fun publicar(
+        materialId: Int
+    ): Int
+
+    // Publicación directa por el profesor responsable.
+    @Query("""
+        UPDATE materiales_educativos
+        SET estado = 'PUBLICADO'
+        WHERE id = :materialId
+          AND profesorId = :profesorId
+          AND estado = 'BORRADOR'
+    """)
+    suspend fun publicarPorProfesor(
+        materialId: Int,
+        profesorId: Int
+    ): Int
 }

@@ -2,9 +2,11 @@ package com.example.mpaz_pro_1
 
 import android.os.Bundle
 import android.content.Context
+import android.content.Intent
 import android.net.Uri
 import android.provider.OpenableColumns
 import androidx.activity.ComponentActivity
+import androidx.core.content.FileProvider
 import androidx.activity.compose.setContent
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -64,7 +66,9 @@ class MainActivity : ComponentActivity() {
                     materialRepository = materialRepository,
                     asignacionCursoDao = database.asignacionCursoDao(),
                     usuarioDao = database.usuarioDao(),
-                    cursoDao = database.cursoDao()
+                    cursoDao = database.cursoDao(),
+                    asignacionEstudianteDao = database.asignacionEstudianteDao(),
+                    materialEducativoDao = database.materialEducativoDao()
                 )
             }
         }
@@ -78,7 +82,9 @@ fun MPAZApp(
     materialRepository: com.example.mpaz_pro_1.data.MaterialRepository,
     asignacionCursoDao: com.example.mpaz_pro_1.data.AsignacionCursoDao,
     usuarioDao: com.example.mpaz_pro_1.data.UsuarioDao,
-    cursoDao: com.example.mpaz_pro_1.data.CursoDao
+    cursoDao: com.example.mpaz_pro_1.data.CursoDao,
+    asignacionEstudianteDao: com.example.mpaz_pro_1.data.AsignacionEstudianteDao,
+    materialEducativoDao: com.example.mpaz_pro_1.data.MaterialEducativoDao
 ) {
     val scope = rememberCoroutineScope()
 
@@ -214,6 +220,10 @@ fun MPAZApp(
 
         "ESTUDIANTE" -> PantallaInicio(
             nombre = nombre,
+            estudianteId = usuarioId,
+            asignacionEstudianteDao = asignacionEstudianteDao,
+            cursoDao = cursoDao,
+            materialEducativoDao = materialEducativoDao,
             onCerrarSesion = { cerrarSesion() }
         )
 
@@ -233,6 +243,8 @@ fun MPAZApp(
             usuarioDao = usuarioDao,
             registroRepository = registroRepository,
             cursoDao = cursoDao,
+            materialRepository = materialRepository,
+            asignacionEstudianteDao = asignacionEstudianteDao,
             onCerrarSesion = { cerrarSesion() }
         )
 
@@ -528,9 +540,42 @@ fun PantallaLogin(
 @Composable
 fun PantallaInicio(
     nombre: String,
+    estudianteId: Int,
+    asignacionEstudianteDao: com.example.mpaz_pro_1.data.AsignacionEstudianteDao,
+    cursoDao: com.example.mpaz_pro_1.data.CursoDao,
+    materialEducativoDao: com.example.mpaz_pro_1.data.MaterialEducativoDao,
     onCerrarSesion: () -> Unit
 ) {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
     var seccion by remember { mutableStateOf("Inicio") }
+    var cursoEstudiante by remember { mutableStateOf<com.example.mpaz_pro_1.data.Curso?>(null) }
+    var materialesPublicados by remember { mutableStateOf(emptyList<com.example.mpaz_pro_1.data.MaterialEducativo>()) }
+    var cargandoMateriales by remember { mutableStateOf(false) }
+    var mensajeMateriales by remember { mutableStateOf("") }
+
+    suspend fun cargarMaterialesEstudiante() {
+        cargandoMateriales = true
+        mensajeMateriales = ""
+        try {
+            val asignacion = asignacionEstudianteDao.obtenerPorEstudiante(estudianteId)
+            if (asignacion == null) {
+                cursoEstudiante = null
+                materialesPublicados = emptyList()
+            } else {
+                cursoEstudiante = cursoDao.buscarPorId(asignacion.cursoId)
+                materialesPublicados = materialEducativoDao.obtenerPublicadosPorCurso(asignacion.cursoId)
+            }
+        } catch (e: Exception) {
+            mensajeMateriales = e.localizedMessage ?: "No se pudieron cargar los materiales."
+        } finally {
+            cargandoMateriales = false
+        }
+    }
+
+    LaunchedEffect(estudianteId) {
+        cargarMaterialesEstudiante()
+    }
     var asignaturaSeleccionada by remember { mutableStateOf("") }
     var unidadSeleccionada by remember { mutableStateOf("") }
     var temaSeleccionado by remember { mutableStateOf("") }
@@ -688,6 +733,74 @@ fun PantallaInicio(
                             }
                         }
                     }
+                    "Materiales" -> {
+                        Text("📚 Mis materiales", fontSize = 25.sp, fontWeight = FontWeight.ExtraBold, color = Azul)
+                        Spacer(Modifier.height(8.dp))
+                        Text(
+                            cursoEstudiante?.let { "Curso: ${it.nombre} · ${it.nivel} ${it.seccion}" }
+                                ?: "Todavía no tienes un curso asignado.",
+                            color = TextoOscuro
+                        )
+                        Spacer(Modifier.height(14.dp))
+                        when {
+                            cargandoMateriales -> CircularProgressIndicator()
+                            mensajeMateriales.isNotBlank() -> Text(mensajeMateriales, color = Color(0xFFD32F2F))
+                            cursoEstudiante == null -> Text("Solicita a UTP que te asigne a un curso para recibir tus materiales.", color = Color.Gray)
+                            materialesPublicados.isEmpty() -> Text("Todavía no hay PDF publicados para tu curso. Cuando tu profesor los publique, aparecerán aquí.", color = Color.Gray)
+                            else -> materialesPublicados.forEach { material ->
+                                Card(
+                                    modifier = Modifier.fillMaxWidth().padding(bottom = 10.dp),
+                                    shape = RoundedCornerShape(18.dp),
+                                    colors = CardDefaults.cardColors(containerColor = Color.White)
+                                ) {
+                                    Column(Modifier.padding(16.dp)) {
+                                        Text(material.tema, fontSize = 18.sp, fontWeight = FontWeight.Bold, color = TextoOscuro)
+                                        Spacer(Modifier.height(4.dp))
+                                        Text("${material.asignatura} · ${material.unidad}", color = Azul)
+                                        if (material.descripcion.isNotBlank()) {
+                                            Spacer(Modifier.height(5.dp))
+                                            Text(material.descripcion, color = TextoOscuro)
+                                        }
+                                        Spacer(Modifier.height(6.dp))
+                                        Text("📎 ${material.nombreArchivo}", fontSize = 13.sp)
+                                        Spacer(Modifier.height(10.dp))
+                                        Button(
+                                            onClick = {
+                                                try {
+                                                    val archivo = File(material.rutaArchivo)
+                                                    if (!archivo.exists()) {
+                                                        mensajeMateriales = "No se encontró el archivo PDF en el dispositivo."
+                                                    } else {
+                                                        val uri = FileProvider.getUriForFile(
+                                                            context,
+                                                            "${context.packageName}.fileprovider",
+                                                            archivo
+                                                        )
+                                                        val intent = Intent(Intent.ACTION_VIEW).apply {
+                                                            setDataAndType(uri, "application/pdf")
+                                                            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                                                        }
+                                                        context.startActivity(intent)
+                                                    }
+                                                } catch (e: Exception) {
+                                                    mensajeMateriales = e.localizedMessage ?: "No se pudo abrir el PDF. Verifica que haya un lector de PDF instalado."
+                                                }
+                                            },
+                                            modifier = Modifier.fillMaxWidth(),
+                                            colors = ButtonDefaults.buttonColors(containerColor = Verde)
+                                        ) { Text("Abrir PDF") }
+                                    }
+                                }
+                            }
+                        }
+                        if (mensajeMateriales.isNotBlank() && !cargandoMateriales) {
+                            Spacer(Modifier.height(8.dp))
+                            Text(mensajeMateriales, color = Color(0xFFD32F2F), fontSize = 12.sp)
+                        }
+                        TextButton(onClick = { scope.launch { cargarMaterialesEstudiante() } }) {
+                            Text("Actualizar materiales")
+                        }
+                    }
                     "Mis logros" -> {
                         Text("🏆 Mis logros", fontSize = 25.sp, fontWeight = FontWeight.ExtraBold, color = Morado)
                         Spacer(Modifier.height(10.dp))
@@ -729,12 +842,13 @@ fun PantallaInicio(
                 }
             }
             NavigationBar(containerColor = Color.White) {
-                val opciones = listOf("Inicio" to "🏠", "Aprender" to "📖", "Mis logros" to "🏆", "Perfil" to "😊")
+                val opciones = listOf("Inicio" to "🏠", "Aprender" to "📖", "Materiales" to "📚", "Mis logros" to "🏆", "Perfil" to "😊")
                 opciones.forEach { (nombreOpcion, emoji) ->
                     NavigationBarItem(
                         selected = seccion == nombreOpcion,
                         onClick = {
                             seccion = nombreOpcion
+                            if (nombreOpcion == "Materiales") { scope.launch { cargarMaterialesEstudiante() } }
                             if (nombreOpcion != "Aprender") { asignaturaSeleccionada = ""; unidadSeleccionada = ""; temaSeleccionado = "" }
                             if (nombreOpcion == "Aprender") { unidadSeleccionada = ""; temaSeleccionado = "" }
                         },
@@ -841,7 +955,7 @@ fun PantallaProfesor(
 
         TarjetaPanel(
             "📚", "Material educativo",
-            "Carga PDF y envíalos a revisión de UTP.",
+            "Consulta los PDF que UTP te ha asignado y decide cuándo publicarlos.",
             Color(0xFFDCEAFF)
         ) { mostrarCarga = true }
 
@@ -871,156 +985,109 @@ fun PantallaCargaMaterial(
     asignacionCursoDao: com.example.mpaz_pro_1.data.AsignacionCursoDao,
     onVolver: () -> Unit
 ) {
-    val context = LocalContext.current
     val scope = rememberCoroutineScope()
-    var cursos by remember { mutableStateOf(emptyList<com.example.mpaz_pro_1.data.Curso>()) }
-    var cursoSeleccionado by remember { mutableStateOf<com.example.mpaz_pro_1.data.Curso?>(null) }
-    var menuCursos by remember { mutableStateOf(false) }
-    var asignatura by remember { mutableStateOf("") }
-    var unidad by remember { mutableStateOf("") }
-    var tema by remember { mutableStateOf("") }
-    var descripcion by remember { mutableStateOf("") }
-    var nombreArchivo by remember { mutableStateOf("") }
-    var rutaArchivo by remember { mutableStateOf("") }
-    var mensaje by remember { mutableStateOf("") }
-    var guardando by remember { mutableStateOf(false) }
     var materiales by remember { mutableStateOf(emptyList<com.example.mpaz_pro_1.data.MaterialEducativo>()) }
+    var cargando by remember { mutableStateOf(true) }
+    var mensaje by remember { mutableStateOf("") }
+
+    suspend fun cargarMateriales() {
+        materiales = materialRepository.obtenerMaterialesProfesor(profesorId)
+    }
 
     LaunchedEffect(profesorId) {
         try {
-            cursos = asignacionCursoDao.obtenerCursosDelProfesor(profesorId)
-            materiales = materialRepository.obtenerMaterialesProfesor(profesorId)
+            cargarMateriales()
         } catch (e: Exception) {
-            mensaje = e.message ?: "No se pudieron cargar los cursos."
-        }
-    }
-
-    val selectorPdf = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.OpenDocument()
-    ) { uri: Uri? ->
-        if (uri != null) {
-            scope.launch {
-                try {
-                    val resultado = withContext(Dispatchers.IO) {
-                        copiarPdfAlAlmacenamiento(context, uri)
-                    }
-                    nombreArchivo = resultado.first
-                    rutaArchivo = resultado.second
-                    mensaje = "PDF seleccionado correctamente."
-                } catch (e: Exception) {
-                    mensaje = e.message ?: "No se pudo copiar el PDF."
-                }
-            }
+            mensaje = e.localizedMessage ?: "No se pudieron cargar los materiales."
+        } finally {
+            cargando = false
         }
     }
 
     Column(
-        modifier = Modifier.fillMaxSize().background(Fondo)
-            .verticalScroll(rememberScrollState()).padding(20.dp)
+        modifier = Modifier
+            .fillMaxSize()
+            .background(Fondo)
+            .verticalScroll(rememberScrollState())
+            .padding(20.dp)
     ) {
         TextButton(onClick = onVolver) { Text("← Volver al panel") }
-        Text("📄 Cargar material educativo", fontSize = 25.sp,
-            fontWeight = FontWeight.ExtraBold, color = Azul)
-        Text("Los materiales se guardan como borrador y luego se envían a UTP.",
-            color = TextoOscuro)
+        Text("📚 Materiales asignados", fontSize = 25.sp, fontWeight = FontWeight.ExtraBold, color = Azul)
+        Text("UTP te asigna los recursos. Tú decides cuándo compartirlos con tus estudiantes.", color = TextoOscuro)
         Spacer(Modifier.height(18.dp))
 
-        Card(colors = CardDefaults.cardColors(containerColor = Color.White)) {
-            Column(Modifier.padding(16.dp)) {
-                Text("Curso asignado", fontWeight = FontWeight.Bold)
-                Spacer(Modifier.height(6.dp))
-                Box {
-                    OutlinedButton(onClick = { menuCursos = true }, modifier = Modifier.fillMaxWidth()) {
-                        Text(cursoSeleccionado?.let { "${it.nombre} · ${it.nivel} ${it.seccion}" }
-                            ?: "Seleccionar curso")
-                    }
-                    DropdownMenu(expanded = menuCursos, onDismissRequest = { menuCursos = false }) {
-                        cursos.forEach { curso ->
-                            DropdownMenuItem(
-                                text = { Text("${curso.nombre} · ${curso.nivel} ${curso.seccion}") },
-                                onClick = { cursoSeleccionado = curso; menuCursos = false }
-                            )
-                        }
-                    }
+        if (cargando) {
+            CircularProgressIndicator()
+        } else if (materiales.isEmpty()) {
+            Card(colors = CardDefaults.cardColors(containerColor = Color.White)) {
+                Column(Modifier.padding(18.dp)) {
+                    Text("Todavía no tienes materiales asignados.", fontWeight = FontWeight.Bold)
+                    Text("Cuando UTP te asigne un PDF, aparecerá aquí.", color = Color.Gray)
                 }
-                if (cursos.isEmpty()) {
-                    Text("No tienes cursos asignados. Solicita a UTP que te asigne uno.",
-                        color = Color(0xFFD32F2F), fontSize = 12.sp)
-                }
-                Spacer(Modifier.height(10.dp))
-                OutlinedTextField(asignatura, { asignatura = it }, label = { Text("Asignatura") }, modifier = Modifier.fillMaxWidth())
-                OutlinedTextField(unidad, { unidad = it }, label = { Text("Unidad") }, modifier = Modifier.fillMaxWidth())
-                OutlinedTextField(tema, { tema = it }, label = { Text("Tema") }, modifier = Modifier.fillMaxWidth())
-                OutlinedTextField(descripcion, { descripcion = it }, label = { Text("Descripción") }, modifier = Modifier.fillMaxWidth(), minLines = 2)
-                Spacer(Modifier.height(12.dp))
-                OutlinedButton(
-                    onClick = { selectorPdf.launch(arrayOf("application/pdf")) },
-                    modifier = Modifier.fillMaxWidth()
-                ) { Text(if (nombreArchivo.isBlank()) "Seleccionar archivo PDF" else "📎 $nombreArchivo") }
-                if (mensaje.isNotBlank()) {
-                    Spacer(Modifier.height(8.dp))
-                    Text(mensaje, color = Azul, fontSize = 13.sp)
-                }
-                Spacer(Modifier.height(14.dp))
-                Button(
-                    enabled = !guardando && cursoSeleccionado != null && asignatura.isNotBlank() &&
-                            unidad.isNotBlank() && tema.isNotBlank() && nombreArchivo.isNotBlank(),
-                    modifier = Modifier.fillMaxWidth(),
-                    onClick = {
-                        scope.launch {
-                            guardando = true
-                            try {
-                                materialRepository.crearMaterial(
-                                    profesorId = profesorId,
-                                    cursoId = cursoSeleccionado!!.id,
-                                    asignatura = asignatura.trim(),
-                                    unidad = unidad.trim(),
-                                    tema = tema.trim(),
-                                    descripcion = descripcion.trim(),
-                                    nombreArchivo = nombreArchivo,
-                                    rutaArchivo = rutaArchivo
-                                )
-                                materiales = materialRepository.obtenerMaterialesProfesor(profesorId)
-                                asignatura = ""; unidad = ""; tema = ""; descripcion = ""
-                                nombreArchivo = ""; rutaArchivo = ""
-                                mensaje = "Material guardado como BORRADOR. Ya puedes enviarlo a UTP."
-                            } catch (e: Exception) {
-                                mensaje = e.message ?: "No se pudo guardar el material."
-                            } finally { guardando = false }
-                        }
-                    }
-                ) { Text(if (guardando) "Guardando..." else "Guardar borrador") }
             }
-        }
-
-        Spacer(Modifier.height(20.dp))
-        Text("Mis materiales", fontSize = 20.sp, fontWeight = FontWeight.Bold, color = Azul)
-        Spacer(Modifier.height(8.dp))
-        if (materiales.isEmpty()) {
-            Text("Todavía no has cargado materiales.", color = TextoOscuro)
         } else {
             materiales.forEach { material ->
-                Card(modifier = Modifier.fillMaxWidth().padding(bottom = 10.dp),
-                    colors = CardDefaults.cardColors(containerColor = Color.White)) {
-                    Column(Modifier.padding(14.dp)) {
-                        Text(material.tema, fontWeight = FontWeight.Bold)
-                        Text("${material.asignatura} · ${material.unidad}", fontSize = 13.sp)
-                        Text("${material.nombreArchivo} · ${material.estado}", fontSize = 12.sp, color = Azul)
-                        if (material.estado == "BORRADOR" || material.estado == "DEVUELTO") {
-                            TextButton(onClick = {
-                                scope.launch {
-                                    val enviado = materialRepository.enviarARevision(material.id, profesorId)
-                                    materiales = materialRepository.obtenerMaterialesProfesor(profesorId)
-                                    mensaje = if (enviado) "Material enviado a revisión de UTP." else "No se pudo enviar el material."
-                                }
-                            }) { Text("Enviar a revisión de UTP") }
+                Card(
+                    modifier = Modifier.fillMaxWidth().padding(bottom = 12.dp),
+                    colors = CardDefaults.cardColors(containerColor = Color.White),
+                    shape = RoundedCornerShape(18.dp)
+                ) {
+                    Column(Modifier.padding(16.dp)) {
+                        Text(material.tema, fontSize = 17.sp, fontWeight = FontWeight.Bold, color = TextoOscuro)
+                        Spacer(Modifier.height(4.dp))
+                        Text("${material.asignatura} · ${material.unidad}", color = Azul)
+                        if (material.descripcion.isNotBlank()) {
+                            Spacer(Modifier.height(4.dp))
+                            Text(material.descripcion, color = TextoOscuro)
+                        }
+                        Spacer(Modifier.height(6.dp))
+                        Text("📎 ${material.nombreArchivo}", fontSize = 13.sp)
+                        Text("Estado: ${material.estado}", fontSize = 12.sp, color = Morado)
+
+                        if (material.estado == "BORRADOR") {
+                            Spacer(Modifier.height(8.dp))
+                            Button(
+                                enabled = !cargando,
+                                onClick = {
+                                    scope.launch {
+                                        cargando = true
+                                        mensaje = ""
+                                        try {
+                                            val publicado = materialRepository.publicarMaterialPorProfesor(
+                                                materialId = material.id,
+                                                profesorId = profesorId
+                                            )
+                                            mensaje = if (publicado) {
+                                                "Material publicado para tus estudiantes."
+                                            } else {
+                                                "No se pudo publicar. Verifica que el material siga asignado a tu cuenta."
+                                            }
+                                            cargarMateriales()
+                                        } catch (e: Exception) {
+                                            mensaje = e.localizedMessage ?: "No se pudo publicar el material."
+                                        } finally {
+                                            cargando = false
+                                        }
+                                    }
+                                },
+                                colors = ButtonDefaults.buttonColors(containerColor = Verde)
+                            ) { Text("Publicar para estudiantes") }
+                        } else if (material.estado == "PUBLICADO") {
+                            Text("✓ Visible para estudiantes", color = Verde, fontWeight = FontWeight.Bold)
+                        } else {
+                            Text("Este material todavía no se puede publicar desde aquí.", color = Color.Gray, fontSize = 12.sp)
                         }
                         if (material.observacionUtp.isNotBlank()) {
+                            Spacer(Modifier.height(6.dp))
                             Text("Observación UTP: ${material.observacionUtp}", color = Color(0xFFD32F2F), fontSize = 12.sp)
                         }
                     }
                 }
             }
+        }
+        if (mensaje.isNotBlank()) {
+            Spacer(Modifier.height(8.dp))
+            Text(mensaje, color = Azul)
         }
     }
 }
@@ -1118,9 +1185,12 @@ fun PantallaUTP(
     usuarioDao: com.example.mpaz_pro_1.data.UsuarioDao,
     registroRepository: com.example.mpaz_pro_1.data.RegistroRepository,
     cursoDao: com.example.mpaz_pro_1.data.CursoDao,
+    materialRepository: com.example.mpaz_pro_1.data.MaterialRepository,
+    asignacionEstudianteDao: com.example.mpaz_pro_1.data.AsignacionEstudianteDao,
     onCerrarSesion: () -> Unit
 ) {
     val scope = rememberCoroutineScope()
+    val context = LocalContext.current
     var seccion by remember { mutableStateOf("Inicio") }
     var usuarios by remember { mutableStateOf(emptyList<com.example.mpaz_pro_1.data.Usuario>()) }
     var filtro by remember { mutableStateOf("Todos") }
@@ -1138,6 +1208,20 @@ fun PantallaUTP(
     var nivelCurso by remember { mutableStateOf("1° Básico") }
     var seccionCurso by remember { mutableStateOf("A") }
 
+    // Formulario de carga de material por UTP
+    var profesores by remember { mutableStateOf(emptyList<com.example.mpaz_pro_1.data.Usuario>()) }
+    var profesorSeleccionado by remember { mutableStateOf<com.example.mpaz_pro_1.data.Usuario?>(null) }
+    var cursoMaterialSeleccionado by remember { mutableStateOf<com.example.mpaz_pro_1.data.Curso?>(null) }
+    var menuProfesores by remember { mutableStateOf(false) }
+    var menuCursosMaterial by remember { mutableStateOf(false) }
+    var asignaturaMaterial by remember { mutableStateOf("") }
+    var unidadMaterial by remember { mutableStateOf("") }
+    var temaMaterial by remember { mutableStateOf("") }
+    var descripcionMaterial by remember { mutableStateOf("") }
+    var nombrePdf by remember { mutableStateOf("") }
+    var rutaPdf by remember { mutableStateOf("") }
+    var guardandoMaterial by remember { mutableStateOf(false) }
+
     suspend fun cargarUsuarios() {
         usuarios = usuarioDao.obtenerTodos()
     }
@@ -1150,9 +1234,37 @@ fun PantallaUTP(
         try {
             if (seccion == "Usuarios y roles") cargarUsuarios()
             if (seccion == "Cursos y asignaturas") cargarCursos()
+            if (seccion == "Material educativo") {
+                cargarUsuarios()
+                cargarCursos()
+                profesores = usuarios.filter {
+                    it.rol.equals("Profesor", ignoreCase = true) || it.rol.equals("Docente", ignoreCase = true)
+                }
+            }
         } catch (e: Exception) {
             mensaje = e.localizedMessage ?: "No se pudo cargar la información."
             esError = true
+        }
+    }
+
+    val selectorPdfUtp = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.OpenDocument()
+    ) { uri: Uri? ->
+        if (uri != null) {
+            scope.launch {
+                try {
+                    val archivo = withContext(Dispatchers.IO) {
+                        copiarPdfAlAlmacenamiento(context, uri)
+                    }
+                    nombrePdf = archivo.first
+                    rutaPdf = archivo.second
+                    mensaje = "PDF seleccionado correctamente."
+                    esError = false
+                } catch (e: Exception) {
+                    mensaje = e.localizedMessage ?: "No se pudo copiar el PDF."
+                    esError = true
+                }
+            }
         }
     }
 
@@ -1195,6 +1307,12 @@ fun PantallaUTP(
                 "Carga y organiza recursos educativos.",
                 Color(0xFFD9FBE6)
             ) { seccion = "Material educativo" }
+
+            TarjetaPanel(
+                "🧒", "Asignación de estudiantes",
+                "Inscribe estudiantes en sus cursos y consulta sus asignaciones.",
+                Color(0xFFFFE8B3)
+            ) { seccion = "Asignación de estudiantes" }
 
             TarjetaPanel(
                 "✅", "Revisión y publicación",
@@ -1464,17 +1582,356 @@ fun PantallaUTP(
                     Text(mensaje, color = if (esError) Color(0xFFD32F2F) else Color(0xFF258C58))
                 }
             } else if (seccion == "Material educativo") {
-                Text("Módulo de materiales educativos", fontWeight = FontWeight.Bold, color = TextoOscuro)
-                Text("Aquí se implementará la carga de PDF por UTP y su asignación a curso y profesor.", color = TextoOscuro)
+                Text("Asigna un recurso al profesor y al curso correspondiente.", color = TextoOscuro)
+                Spacer(Modifier.height(12.dp))
+                Card(colors = CardDefaults.cardColors(containerColor = Color.White)) {
+                    Column(Modifier.padding(16.dp)) {
+                        Text("1. Seleccionar profesor", fontWeight = FontWeight.Bold)
+                        Spacer(Modifier.height(6.dp))
+                        Box {
+                            OutlinedButton(onClick = { menuProfesores = true }, modifier = Modifier.fillMaxWidth()) {
+                                Text(profesorSeleccionado?.let { it.nombre } ?: "Seleccionar profesor")
+                            }
+                            DropdownMenu(expanded = menuProfesores, onDismissRequest = { menuProfesores = false }) {
+                                profesores.forEach { profesor ->
+                                    DropdownMenuItem(
+                                        text = { Text("${profesor.nombre} · ${profesor.correo}") },
+                                        onClick = { profesorSeleccionado = profesor; menuProfesores = false }
+                                    )
+                                }
+                            }
+                        }
+                        if (profesores.isEmpty()) {
+                            Text("No hay cuentas de profesor registradas.", color = Color(0xFFD32F2F), fontSize = 12.sp)
+                        }
+                        Spacer(Modifier.height(12.dp))
+                        Text("2. Seleccionar curso", fontWeight = FontWeight.Bold)
+                        Spacer(Modifier.height(6.dp))
+                        Box {
+                            OutlinedButton(onClick = { menuCursosMaterial = true }, modifier = Modifier.fillMaxWidth()) {
+                                Text(cursoMaterialSeleccionado?.let { "${it.nombre} · ${it.nivel} ${it.seccion}" } ?: "Seleccionar curso")
+                            }
+                            DropdownMenu(expanded = menuCursosMaterial, onDismissRequest = { menuCursosMaterial = false }) {
+                                cursos.forEach { curso ->
+                                    DropdownMenuItem(
+                                        text = { Text("${curso.nombre} · ${curso.nivel} ${curso.seccion}") },
+                                        onClick = { cursoMaterialSeleccionado = curso; menuCursosMaterial = false }
+                                    )
+                                }
+                            }
+                        }
+                        if (cursos.isEmpty()) {
+                            Text("Primero registra un curso activo en Cursos y asignaturas.", color = Color(0xFFD32F2F), fontSize = 12.sp)
+                        }
+                        Spacer(Modifier.height(12.dp))
+                        Text("3. Información del material", fontWeight = FontWeight.Bold)
+                        OutlinedTextField(asignaturaMaterial, { asignaturaMaterial = it }, label = { Text("Asignatura") }, modifier = Modifier.fillMaxWidth(), singleLine = true)
+                        OutlinedTextField(unidadMaterial, { unidadMaterial = it }, label = { Text("Unidad") }, modifier = Modifier.fillMaxWidth(), singleLine = true)
+                        OutlinedTextField(temaMaterial, { temaMaterial = it }, label = { Text("Tema") }, modifier = Modifier.fillMaxWidth(), singleLine = true)
+                        OutlinedTextField(descripcionMaterial, { descripcionMaterial = it }, label = { Text("Descripción (opcional)") }, modifier = Modifier.fillMaxWidth(), minLines = 2)
+                        Spacer(Modifier.height(12.dp))
+                        OutlinedButton(onClick = { selectorPdfUtp.launch(arrayOf("application/pdf")) }, modifier = Modifier.fillMaxWidth()) {
+                            Text(if (nombrePdf.isBlank()) "Seleccionar archivo PDF" else "📎 $nombrePdf")
+                        }
+                        Spacer(Modifier.height(8.dp))
+                        Text("El material quedará como BORRADOR. El profesor decidirá cuándo publicarlo.", color = TextoOscuro, fontSize = 12.sp)
+                        Button(
+                            enabled = !guardandoMaterial && profesorSeleccionado != null && cursoMaterialSeleccionado != null &&
+                                    asignaturaMaterial.isNotBlank() && unidadMaterial.isNotBlank() && temaMaterial.isNotBlank() &&
+                                    nombrePdf.isNotBlank() && rutaPdf.isNotBlank(),
+                            modifier = Modifier.fillMaxWidth(),
+                            onClick = {
+                                scope.launch {
+                                    guardandoMaterial = true
+                                    mensaje = ""
+                                    try {
+                                        materialRepository.crearMaterialDesdeUTP(
+                                            rol = "UTP",
+                                            profesorId = profesorSeleccionado!!.id,
+                                            cursoId = cursoMaterialSeleccionado!!.id,
+                                            asignatura = asignaturaMaterial.trim(),
+                                            unidad = unidadMaterial.trim(),
+                                            tema = temaMaterial.trim(),
+                                            descripcion = descripcionMaterial.trim(),
+                                            nombreArchivo = nombrePdf,
+                                            rutaArchivo = rutaPdf
+                                        )
+                                        mensaje = "Material asignado correctamente. El profesor ya puede verlo."
+                                        esError = false
+                                        profesorSeleccionado = null
+                                        cursoMaterialSeleccionado = null
+                                        asignaturaMaterial = ""
+                                        unidadMaterial = ""
+                                        temaMaterial = ""
+                                        descripcionMaterial = ""
+                                        nombrePdf = ""
+                                        rutaPdf = ""
+                                    } catch (e: Exception) {
+                                        mensaje = e.localizedMessage ?: "No se pudo asignar el material."
+                                        esError = true
+                                    } finally {
+                                        guardandoMaterial = false
+                                    }
+                                }
+                            }
+                        ) { Text(if (guardandoMaterial) "Guardando..." else "Asignar material al profesor") }
+                    }
+                }
+                if (mensaje.isNotBlank()) {
+                    Spacer(Modifier.height(10.dp))
+                    Text(mensaje, color = if (esError) Color(0xFFD32F2F) else Color(0xFF258C58))
+                }
             } else if (seccion == "Revisión y publicación") {
-                Text("Módulo de revisión y publicación", fontWeight = FontWeight.Bold, color = TextoOscuro)
-                Text("Aquí se mostrarán los PDF para revisar y publicar a los estudiantes.", color = TextoOscuro)
+                Text("La publicación de los materiales asignados queda a cargo de cada profesor.", color = TextoOscuro)
+                Text("UTP puede seguir utilizando el flujo de revisión de materiales enviados por profesores, pero no publica los materiales asignados desde esta pantalla.", color = Color.Gray, fontSize = 12.sp)
+            } else if (seccion == "Asignación de estudiantes") {
+                PantallaAsignacionEstudiantes(
+                    usuarioDao = usuarioDao,
+                    cursoDao = cursoDao,
+                    asignacionEstudianteDao = asignacionEstudianteDao
+                )
             }
         }
 
         Spacer(Modifier.height(20.dp))
         Button(onClick = onCerrarSesion, modifier = Modifier.fillMaxWidth()) {
             Text("Cerrar sesión")
+        }
+    }
+}
+
+@Composable
+fun PantallaAsignacionEstudiantes(
+    usuarioDao: com.example.mpaz_pro_1.data.UsuarioDao,
+    cursoDao: com.example.mpaz_pro_1.data.CursoDao,
+    asignacionEstudianteDao: com.example.mpaz_pro_1.data.AsignacionEstudianteDao
+) {
+    val scope = rememberCoroutineScope()
+
+    var estudiantes by remember {
+        mutableStateOf(emptyList<com.example.mpaz_pro_1.data.Usuario>())
+    }
+    var cursos by remember {
+        mutableStateOf(emptyList<com.example.mpaz_pro_1.data.Curso>())
+    }
+    var asignaciones by remember {
+        mutableStateOf(emptyList<com.example.mpaz_pro_1.data.AsignacionEstudiante>())
+    }
+
+    var estudianteSeleccionado by remember {
+        mutableStateOf<com.example.mpaz_pro_1.data.Usuario?>(null)
+    }
+    var cursoSeleccionado by remember {
+        mutableStateOf<com.example.mpaz_pro_1.data.Curso?>(null)
+    }
+    var menuEstudiantes by remember { mutableStateOf(false) }
+    var menuCursos by remember { mutableStateOf(false) }
+    var cargando by remember { mutableStateOf(false) }
+    var mensaje by remember { mutableStateOf("") }
+    var esError by remember { mutableStateOf(false) }
+
+    suspend fun cargarDatos() {
+        val todosLosUsuarios = usuarioDao.obtenerTodos()
+        estudiantes = todosLosUsuarios.filter {
+            it.rol.trim().equals("Estudiante", ignoreCase = true)
+        }
+        cursos = cursoDao.obtenerActivos()
+        asignaciones = asignacionEstudianteDao.obtenerTodas()
+    }
+
+    LaunchedEffect(Unit) {
+        cargando = true
+        try {
+            cargarDatos()
+        } catch (e: Exception) {
+            mensaje = e.localizedMessage ?: "No se pudieron cargar los datos."
+            esError = true
+        } finally {
+            cargando = false
+        }
+    }
+
+    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        Text(
+            "Asigna cada estudiante a un curso activo. Si ya tenía un curso, la nueva asignación lo reemplazará.",
+            color = TextoOscuro,
+            fontSize = 13.sp
+        )
+
+        Card(
+            modifier = Modifier.fillMaxWidth(),
+            colors = CardDefaults.cardColors(containerColor = Color.White),
+            shape = RoundedCornerShape(18.dp)
+        ) {
+            Column(
+                modifier = Modifier.padding(16.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                Text("1. Seleccionar estudiante", fontWeight = FontWeight.Bold)
+
+                Box {
+                    OutlinedButton(
+                        onClick = { menuEstudiantes = true },
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text(
+                            estudianteSeleccionado?.let { "${it.nombre} · ${it.correo}" }
+                                ?: "Seleccionar estudiante"
+                        )
+                    }
+
+                    DropdownMenu(
+                        expanded = menuEstudiantes,
+                        onDismissRequest = { menuEstudiantes = false }
+                    ) {
+                        estudiantes.forEach { estudiante ->
+                            DropdownMenuItem(
+                                text = { Text("${estudiante.nombre} · ${estudiante.correo}") },
+                                onClick = {
+                                    estudianteSeleccionado = estudiante
+                                    menuEstudiantes = false
+                                }
+                            )
+                        }
+                    }
+                }
+
+                if (estudiantes.isEmpty() && !cargando) {
+                    Text(
+                        "No hay estudiantes registrados. Primero crea una cuenta de estudiante.",
+                        color = Color(0xFFD32F2F),
+                        fontSize = 12.sp
+                    )
+                }
+
+                Text("2. Seleccionar curso activo", fontWeight = FontWeight.Bold)
+
+                Box {
+                    OutlinedButton(
+                        onClick = { menuCursos = true },
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text(
+                            cursoSeleccionado?.let {
+                                "${it.nombre} · ${it.nivel} ${it.seccion}"
+                            } ?: "Seleccionar curso"
+                        )
+                    }
+
+                    DropdownMenu(
+                        expanded = menuCursos,
+                        onDismissRequest = { menuCursos = false }
+                    ) {
+                        cursos.forEach { curso ->
+                            DropdownMenuItem(
+                                text = { Text("${curso.nombre} · ${curso.nivel} ${curso.seccion}") },
+                                onClick = {
+                                    cursoSeleccionado = curso
+                                    menuCursos = false
+                                }
+                            )
+                        }
+                    }
+                }
+
+                if (cursos.isEmpty() && !cargando) {
+                    Text(
+                        "No hay cursos activos. Primero crea un curso en Cursos y asignaturas.",
+                        color = Color(0xFFD32F2F),
+                        fontSize = 12.sp
+                    )
+                }
+
+                Button(
+                    onClick = {
+                        val estudiante = estudianteSeleccionado
+                        val curso = cursoSeleccionado
+
+                        if (estudiante == null || curso == null) {
+                            mensaje = "Selecciona un estudiante y un curso."
+                            esError = true
+                        } else {
+                            scope.launch {
+                                cargando = true
+                                mensaje = ""
+                                try {
+                                    asignacionEstudianteDao.asignar(
+                                        com.example.mpaz_pro_1.data.AsignacionEstudiante(
+                                            estudianteId = estudiante.id,
+                                            cursoId = curso.id
+                                        )
+                                    )
+                                    cargarDatos()
+                                    mensaje = "Estudiante asignado al curso correctamente."
+                                    esError = false
+                                } catch (e: Exception) {
+                                    mensaje = e.localizedMessage
+                                        ?: "No se pudo guardar la asignación."
+                                    esError = true
+                                } finally {
+                                    cargando = false
+                                }
+                            }
+                        }
+                    },
+                    enabled = !cargando &&
+                            estudianteSeleccionado != null &&
+                            cursoSeleccionado != null,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text(if (cargando) "Guardando..." else "Asignar estudiante")
+                }
+
+                if (mensaje.isNotBlank()) {
+                    Text(
+                        mensaje,
+                        color = if (esError) Color(0xFFD32F2F) else Color(0xFF258C58),
+                        fontSize = 13.sp
+                    )
+                }
+            }
+        }
+
+        Text(
+            "Estudiantes asignados (${asignaciones.size})",
+            fontWeight = FontWeight.Bold,
+            fontSize = 18.sp,
+            color = TextoOscuro
+        )
+
+        if (cargando && asignaciones.isEmpty()) {
+            CircularProgressIndicator()
+        } else if (asignaciones.isEmpty()) {
+            Text("Todavía no hay estudiantes asignados a cursos.", color = Color.Gray)
+        } else {
+            asignaciones.forEach { asignacion ->
+                val estudiante = estudiantes.firstOrNull {
+                    it.id == asignacion.estudianteId
+                }
+                val curso = cursos.firstOrNull {
+                    it.id == asignacion.cursoId
+                }
+
+                Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = CardDefaults.cardColors(containerColor = Color.White),
+                    shape = RoundedCornerShape(16.dp)
+                ) {
+                    Column(Modifier.padding(14.dp)) {
+                        Text(
+                            estudiante?.nombre ?: "Estudiante #${asignacion.estudianteId}",
+                            fontWeight = FontWeight.Bold,
+                            color = TextoOscuro
+                        )
+                        Text(
+                            curso?.let { "${it.nombre} · ${it.nivel} ${it.seccion}" }
+                                ?: "Curso #${asignacion.cursoId}",
+                            color = Azul,
+                            fontSize = 13.sp
+                        )
+                    }
+                }
+            }
         }
     }
 }

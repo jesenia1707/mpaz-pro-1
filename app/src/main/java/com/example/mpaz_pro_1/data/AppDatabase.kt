@@ -13,10 +13,10 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         Usuario::class,
         Curso::class,
         AsignacionCurso::class,
-        AlumnoPreinscrito::class,
-        MaterialEducativo::class
+        MaterialEducativo::class,
+        AsignacionEstudiante::class
     ],
-    version = 3,
+    version = 4,
     exportSchema = false
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -27,21 +27,21 @@ abstract class AppDatabase : RoomDatabase() {
 
     abstract fun asignacionCursoDao(): AsignacionCursoDao
 
-    abstract fun alumnoPreinscritoDao(): AlumnoPreinscritoDao
-
     abstract fun materialEducativoDao(): MaterialEducativoDao
+
+    abstract fun asignacionEstudianteDao(): AsignacionEstudianteDao
 
     companion object {
 
         @Volatile
         private var INSTANCE: AppDatabase? = null
 
-        // Migración de la versión 1 a la versión 2
+        // Migración de versión 1 a 2
         private val MIGRATION_1_2 = object : Migration(1, 2) {
-
             override fun migrate(db: SupportSQLiteDatabase) {
 
-                db.execSQL("""
+                db.execSQL(
+                    """
                     CREATE TABLE IF NOT EXISTS cursos (
                         id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
                         nombre TEXT NOT NULL,
@@ -49,15 +49,11 @@ abstract class AppDatabase : RoomDatabase() {
                         seccion TEXT NOT NULL,
                         activo INTEGER NOT NULL
                     )
-                """)
+                    """.trimIndent()
+                )
 
-                db.execSQL("""
-                    CREATE UNIQUE INDEX IF NOT EXISTS
-                    index_cursos_nombre
-                    ON cursos(nombre)
-                """)
-
-                db.execSQL("""
+                db.execSQL(
+                    """
                     CREATE TABLE IF NOT EXISTS asignaciones_curso (
                         id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
                         profesorId INTEGER NOT NULL,
@@ -69,59 +65,33 @@ abstract class AppDatabase : RoomDatabase() {
                             REFERENCES cursos(id)
                             ON UPDATE NO ACTION ON DELETE CASCADE
                     )
-                """)
+                    """.trimIndent()
+                )
 
-                db.execSQL("""
+                db.execSQL(
+                    """
                     CREATE INDEX IF NOT EXISTS
                     index_asignaciones_curso_profesorId
                     ON asignaciones_curso(profesorId)
-                """)
+                    """.trimIndent()
+                )
 
-                db.execSQL("""
+                db.execSQL(
+                    """
                     CREATE INDEX IF NOT EXISTS
                     index_asignaciones_curso_cursoId
                     ON asignaciones_curso(cursoId)
-                """)
-
-                db.execSQL("""
-                    CREATE UNIQUE INDEX IF NOT EXISTS
-                    index_asignaciones_curso_profesorId_cursoId
-                    ON asignaciones_curso(profesorId, cursoId)
-                """)
-
-                db.execSQL("""
-                    CREATE TABLE IF NOT EXISTS alumnos_preinscritos (
-                        id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
-                        nombre TEXT NOT NULL,
-                        codigoMatricula TEXT NOT NULL,
-                        cursoId INTEGER NOT NULL,
-                        usado INTEGER NOT NULL,
-                        FOREIGN KEY(cursoId)
-                            REFERENCES cursos(id)
-                            ON UPDATE NO ACTION ON DELETE RESTRICT
-                    )
-                """)
-
-                db.execSQL("""
-                    CREATE UNIQUE INDEX IF NOT EXISTS
-                    index_alumnos_preinscritos_codigoMatricula
-                    ON alumnos_preinscritos(codigoMatricula)
-                """)
-
-                db.execSQL("""
-                    CREATE INDEX IF NOT EXISTS
-                    index_alumnos_preinscritos_cursoId
-                    ON alumnos_preinscritos(cursoId)
-                """)
+                    """.trimIndent()
+                )
             }
         }
 
-        // Migración de la versión 2 a la versión 3
+        // Migración de versión 2 a 3
         private val MIGRATION_2_3 = object : Migration(2, 3) {
-
             override fun migrate(db: SupportSQLiteDatabase) {
 
-                db.execSQL("""
+                db.execSQL(
+                    """
                     CREATE TABLE IF NOT EXISTS materiales_educativos (
                         id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
                         profesorId INTEGER NOT NULL,
@@ -143,25 +113,71 @@ abstract class AppDatabase : RoomDatabase() {
                             REFERENCES cursos(id)
                             ON UPDATE NO ACTION ON DELETE CASCADE
                     )
-                """)
+                    """.trimIndent()
+                )
 
-                db.execSQL("""
+                db.execSQL(
+                    """
                     CREATE INDEX IF NOT EXISTS
                     index_materiales_educativos_profesorId
                     ON materiales_educativos(profesorId)
-                """)
+                    """.trimIndent()
+                )
 
-                db.execSQL("""
+                db.execSQL(
+                    """
                     CREATE INDEX IF NOT EXISTS
                     index_materiales_educativos_cursoId
                     ON materiales_educativos(cursoId)
-                """)
+                    """.trimIndent()
+                )
 
-                db.execSQL("""
+                db.execSQL(
+                    """
                     CREATE INDEX IF NOT EXISTS
                     index_materiales_educativos_estado
                     ON materiales_educativos(estado)
-                """)
+                    """.trimIndent()
+                )
+            }
+        }
+
+        // Migración de versión 3 a 4
+        // Incorpora la asignación de estudiantes a cursos.
+        private val MIGRATION_3_4 = object : Migration(3, 4) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+
+                db.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS asignaciones_estudiante (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                        estudianteId INTEGER NOT NULL,
+                        cursoId INTEGER NOT NULL,
+                        FOREIGN KEY(estudianteId)
+                            REFERENCES usuarios(id)
+                            ON UPDATE NO ACTION ON DELETE CASCADE,
+                        FOREIGN KEY(cursoId)
+                            REFERENCES cursos(id)
+                            ON UPDATE NO ACTION ON DELETE CASCADE
+                    )
+                    """.trimIndent()
+                )
+
+                db.execSQL(
+                    """
+                    CREATE UNIQUE INDEX IF NOT EXISTS
+                    index_asignaciones_estudiante_estudianteId
+                    ON asignaciones_estudiante(estudianteId)
+                    """.trimIndent()
+                )
+
+                db.execSQL(
+                    """
+                    CREATE INDEX IF NOT EXISTS
+                    index_asignaciones_estudiante_cursoId
+                    ON asignaciones_estudiante(cursoId)
+                    """.trimIndent()
+                )
             }
         }
 
@@ -176,11 +192,13 @@ abstract class AppDatabase : RoomDatabase() {
                 )
                     .addMigrations(
                         MIGRATION_1_2,
-                        MIGRATION_2_3
+                        MIGRATION_2_3,
+                        MIGRATION_3_4
                     )
                     .build()
 
                 INSTANCE = instance
+
                 instance
             }
         }
